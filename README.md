@@ -114,14 +114,19 @@ with hard-bounced addresses auto-suppressed. Sending uses the Cloudflare Email S
 
 Setup, in order:
 
-1. **Verify a sending subdomain (MANUAL, PENDING).** In the Cloudflare dashboard, add a
-   sending subdomain (e.g. `notify.<your-domain>`), create the DNS records and enable
-   Email Sending. Until this is done, sending fails with a config error. The `EMAIL_FROM`
-   values in `wrangler.jsonc` are **placeholders** (`staging-notify.placeholder.invalid` /
-   `notify.placeholder.invalid`) and MUST be updated to the verified sending subdomain
-   before any real sends.
+1. **Verify a sending subdomain (DONE 2026-10-18).** Sending subdomain
+   `subcontractor.ww0.dev` is verified and enabled in the Cloudflare dashboard (DNS
+   records created, Email Sending on). `EMAIL_FROM` in `wrangler.jsonc` is configured
+   accordingly: `Subcrew Staging <info@subcontractor.ww0.dev>` /
+   `Subcrew <info@subcontractor.ww0.dev>`. Note the account-level
+   sending quota is **1000 emails/day**; `EMAIL_DAILY_LIMIT` warm-up cap stays below it.
 2. **Create the queues** and attach Email Service event routing to them in the dashboard
-   (`message.delivered`, bounces → the queue):
+   (`message.delivered`, bounces → the queue). **Caveat (2026-10-18):** Cloudflare's
+   dashboard currently offers **no lifecycle-event → Queue routing option** for Email
+   Service (checked domain settings, Connect tab, account settings). Until Cloudflare
+   ships it, delivery/bounce states stay `sent` after send. The Queue consumer code
+   (`email-events-staging` / `email-events-production`) is in place and dormant; the
+   system tolerates missing delivery events:
 
    ```bash
    npx wrangler queues create email-events-staging

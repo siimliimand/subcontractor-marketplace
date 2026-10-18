@@ -102,7 +102,12 @@ reputation during the ramp (implementation-plan risk table).
 
 ## Open Questions
 
-- Exact Email Service Queues event names/fields at GA time — implement against the
-  documented schema and verify in staging before enabling in production (task-level check)
+- ~~Exact Email Service Queues event names/fields at GA time — implement against the
+  documented schema and verify in staging before enabling in production (task-level check)~~
+  **Resolved 2026-10-18 (partially):** event routing is not reachable at all yet — the
+  Cloudflare dashboard offers no lifecycle-event → Queue routing option for Email Service
+  (checked domain settings, Connect tab, account settings). Consumers (`email-events-staging`/
+  `email-events-production`) stay dormant; delivery/bounce states remain `sent` until
+  Cloudflare ships routing. Schema verification still applies once it exists.
 - Whether declining via email should free held capacity immediately — no holds exist
   until Phase 2; re-evaluate with migration 0003

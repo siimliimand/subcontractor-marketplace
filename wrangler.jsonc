@@ -21,8 +21,8 @@
     }
   ],
   // Email Service send binding for `wrangler dev`.
-  // Sending only works once the sending subdomain is verified in the Cloudflare
-  // dashboard (manual step; see README "Email pipeline").
+  // Sending subdomain subcontractor.ww0.dev is verified (2026-10-18; see
+  // README "Email pipeline").
   "send_email": [{ "name": "SEND_EMAIL" }],
   // Warm-up cap: max emails sent per UTC day (D1-counted). Start low, ramp slowly.
   "vars": {
@@ -38,12 +38,10 @@
           "database_id": "53e6e61f-ce10-4197-b091-b02662db95fe"
         }
       ],
-      // PENDING: replace the placeholder subdomain with the verified sending
-      // subdomain before any real sends (see README "Email pipeline").
       // NOTE: wrangler 3.x does not inherit vars/send_email into environments,
       // so these are repeated per env; the top-level entries cover `wrangler dev`.
       "vars": {
-        "EMAIL_FROM": "Subcrew Staging <outreach@staging-notify.placeholder.invalid>",
+        "EMAIL_FROM": "Subcrew Staging <info@subcontractor.ww0.dev>",
         "EMAIL_REPLY_TO": "siim.liimand@gmail.com",
         "EMAIL_DAILY_LIMIT": "50"
       },
@@ -61,10 +59,8 @@
           "database_id": "d4f98dd6-fdc5-40bf-8bf7-c31bbb0ac7ab"
         }
       ],
-      // PENDING: replace the placeholder subdomain with the verified sending
-      // subdomain before any real sends (see README "Email pipeline").
       "vars": {
-        "EMAIL_FROM": "Subcrew <outreach@notify.placeholder.invalid>",
+        "EMAIL_FROM": "Subcrew <info@subcontractor.ww0.dev>",
         "EMAIL_REPLY_TO": "siim.liimand@gmail.com",
         "EMAIL_DAILY_LIMIT": "50"
       },
