@@ -350,26 +350,33 @@ function OutreachPanel({
   return (
     <Card title="Log outreach batch">
       <div className="space-y-2 text-sm">
-        {providers.map(({ company }) => (
-          <label key={company.id} className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={selected.includes(company.id)}
-              disabled={contacted.includes(company.id)}
-              onChange={(e) =>
+        {providers.map(({ company }) => {
+          const isSelected = selected.includes(company.id);
+          const isContacted = contacted.includes(company.id);
+          return (
+            <button
+              key={company.id}
+              type="button"
+              disabled={isContacted}
+              onClick={() =>
                 setSelected(
-                  e.target.checked
-                    ? [...selected, company.id]
-                    : selected.filter((sid) => sid !== company.id),
+                  isSelected
+                    ? selected.filter((sid) => sid !== company.id)
+                    : [...selected, company.id],
                 )
               }
-            />
-            {company.legalName}
-            {contacted.includes(company.id) && (
-              <span className="text-xs text-gray-400">(already contacted)</span>
-            )}
-          </label>
-        ))}
+              className={`flex items-center gap-2 text-left text-sm rounded px-2 py-1 border ${
+                isSelected
+                  ? "bg-purple-100 border-purple-400"
+                  : "bg-white border-gray-200 hover:bg-gray-50"
+              } disabled:opacity-50`}
+            >
+              <span className="inline-block w-3">{isSelected ? "☑" : "☐"}</span>
+              {company.legalName}
+              {isContacted && <span className="text-xs text-gray-400">(already contacted)</span>}
+            </button>
+          );
+        })}
         <input
           className="border rounded p-1.5 w-full"
           placeholder="Batch notes (optional)"
