@@ -7,7 +7,7 @@
 
 ## 2. Cloudflare Access (staff authentication)
 
-- [ ] 2.1 Create Access application + policy for the team on staging; verify a login round-trip before app integration
+- [x] 2.1 Create Access application + policy for the team on staging; verify a login round-trip before app integration
 - [x] 2.2 Implement JWT validation middleware: verify `Cf-Access-Jwt-Assertion` signature against the Access domain and audience; reject everything else with 403 and no data
 - [x] 2.3 Implement staff user auto-provisioning: map JWT email to `users` row (role `staff`), reuse on repeat login, record `login` and `access_denied` audit events
 - [x] 2.4 Add integration tests: valid token passes, missing/invalid token gets 403, non-staff email gets 403
@@ -58,7 +58,7 @@
 
 ## 9. Production rollout
 
-- [ ] 9.1 Create production D1, apply migrations; configure production Access application + policy
-- [ ] 9.2 Deploy production; verify end-to-end: login, create provider, create request, outreach, response, booking, dashboard
-- [ ] 9.3 Secrets audit (`wrangler secret put` only; nothing committed), Access policy verified on staging before production switch
+- [x] 9.1 Create production D1, apply migrations; configure production Access application + policy
+- [x] 9.2 Deploy production; verify end-to-end: login, create provider, create request, outreach, response, booking, dashboard
+- [x] 9.3 Secrets audit (`wrangler secret put` only; nothing committed), Access policy verified on staging before production switch
 - [x] 9.4 Update `docs/implementation-plan.md` Phase 1 checklist and project README with run instructions
