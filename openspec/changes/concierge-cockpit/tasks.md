@@ -44,9 +44,9 @@
 
 ## 7. Effort tracking
 
-- [ ] 7.1 API + UI: manual time entries per request (minutes, staff, note)
-- [ ] 7.2 API: per-request rollup — total minutes and count of manual audit events
-- [ ] 7.3 Test: append-only guarantee — no update/delete path exists for audit events
+- [x] 7.1 API + UI: manual time entries per request (minutes, staff, note)
+- [x] 7.2 API: per-request rollup — total minutes and count of manual audit events
+- [x] 7.3 Test: append-only guarantee — no update/delete path exists for audit events
 
 ## 8. Funnel dashboard
 

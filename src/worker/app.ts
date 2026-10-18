@@ -4,6 +4,7 @@ import { providersRouter } from "./routes/providers";
 import { requestsRouter } from "./routes/requests";
 import { outreachRouter } from "./routes/outreach";
 import { effortRouter } from "./routes/effort";
+import { dashboardRouter } from "./routes/dashboard";
 
 export type Bindings = {
   DB: D1Database;
@@ -28,6 +29,7 @@ export function createApp() {
   app.route("/api/requests", requestsRouter);
   app.route("/api", outreachRouter);
   app.route("/api", effortRouter);
+  app.route("/api/dashboard", dashboardRouter);
 
   return app;
 }
