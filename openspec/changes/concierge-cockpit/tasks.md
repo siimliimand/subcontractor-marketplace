@@ -28,13 +28,13 @@
 
 ## 5. Request administration
 
-- [ ] 5.1 API: create request on behalf of a PM (required: title, description, location, trade, start date, crew size; optional: budget, duration, notes), status `draft`
-- [ ] 5.2 API: enforced state machine `draft → approved → matched → in_outreach → responded → booked → closed` (+ `cancelled` with customer/provider attribution and reason); invalid transitions rejected
-- [ ] 5.3 API: record responses (`interest`/`quote`/`decline` + reason), with capacity declaration (workers count, available-from date); decline requires reason
-- [ ] 5.4 API: booking confirmation from a response (date range + capacity) sets `booked`; second confirmation rejected (first confirmed wins)
-- [ ] 5.5 API: outcomes (`completion_confirmed`, `accepted_but_not_delivered`) and cancellation with attribution
-- [ ] 5.6 UI: request list, request detail with chronological history (events, outreach, responses, booking, outcome), create/approve/respond/book/cancel actions
-- [ ] 5.7 Events: `request_created`, `request_approved`, `matched`, `response_received`, `qualified_response`, `quote_submitted`, `booking_confirmed`, `completion_confirmed`, `accepted_but_not_delivered`, `request_cancelled`; atomicity test (failed mutation writes neither data nor event)
+- [x] 5.1 API: create request on behalf of a PM (required: title, description, location, trade, start date, crew size; optional: budget, duration, notes), status `draft`
+- [x] 5.2 API: enforced state machine `draft → approved → matched → in_outreach → responded → booked → closed` (+ `cancelled` with customer/provider attribution and reason); invalid transitions rejected
+- [x] 5.3 API: record responses (`interest`/`quote`/`decline` + reason), with capacity declaration (workers count, available-from date); decline requires reason
+- [x] 5.4 API: booking confirmation from a response (date range + capacity) sets `booked`; second confirmation rejected (first confirmed wins)
+- [x] 5.5 API: outcomes (`completion_confirmed`, `accepted_but_not_delivered`) and cancellation with attribution
+- [x] 5.6 UI: request list, request detail with chronological history (events, outreach, responses, booking, outcome), create/approve/respond/book/cancel actions
+- [x] 5.7 Events: `request_created`, `request_approved`, `matched`, `response_received`, `qualified_response`, `quote_submitted`, `booking_confirmed`, `completion_confirmed`, `accepted_but_not_delivered`, `request_cancelled`; atomicity test (failed mutation writes neither data nor event)
 
 ## 6. Outreach log
 
