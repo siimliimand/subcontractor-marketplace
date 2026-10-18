@@ -8,9 +8,9 @@
 ## 2. Cloudflare Access (staff authentication)
 
 - [ ] 2.1 Create Access application + policy for the team on staging; verify a login round-trip before app integration
-- [ ] 2.2 Implement JWT validation middleware: verify `Cf-Access-Jwt-Assertion` signature against the Access domain and audience; reject everything else with 403 and no data
-- [ ] 2.3 Implement staff user auto-provisioning: map JWT email to `users` row (role `staff`), reuse on repeat login, record `login` and `access_denied` audit events
-- [ ] 2.4 Add integration tests: valid token passes, missing/invalid token gets 403, non-staff email gets 403
+- [x] 2.2 Implement JWT validation middleware: verify `Cf-Access-Jwt-Assertion` signature against the Access domain and audience; reject everything else with 403 and no data
+- [x] 2.3 Implement staff user auto-provisioning: map JWT email to `users` row (role `staff`), reuse on repeat login, record `login` and `access_denied` audit events
+- [x] 2.4 Add integration tests: valid token passes, missing/invalid token gets 403, non-staff email gets 403
 
 ## 3. Data model and event infrastructure
 
