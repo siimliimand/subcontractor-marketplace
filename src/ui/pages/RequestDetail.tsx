@@ -171,7 +171,7 @@ export default function RequestDetail() {
 
           <OutreachPanel
             providers={providers}
-            contacted={data.outreach.map(({ entry }) => entry.companyId)}
+            outreach={data.outreach}
             disabled={["booked", "cancelled", "closed"].includes(r.status)}
             onLog={async (providerIds, notes) => {
               const res = await fetch(`/api/requests/${id}/outreach`, {
@@ -180,6 +180,16 @@ export default function RequestDetail() {
                 body: JSON.stringify({ providerIds, notes }),
               });
               const body = (await res.json()) as OutreachResult;
+              await load();
+              return body;
+            }}
+            onEmail={async (providerIds) => {
+              const res = await fetch(`/api/requests/${id}/outreach/email`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ providerIds }),
+              });
+              const body = (await res.json()) as EmailSendResult;
               await load();
               return body;
             }}
@@ -307,20 +317,46 @@ type OutreachResult = {
   error?: string;
 };
 
+type EmailSendResult = {
+  sent?: string[];
+  skipped?: { companyId: string; reason: string }[];
+  requestStatus?: string;
+  error?: string;
+};
+
 function OutreachPanel({
   providers,
-  contacted,
+  outreach,
   disabled,
   onLog,
+  onEmail,
 }: {
   providers: { company: { id: string; legalName: string } }[];
-  contacted: string[];
+  outreach: RequestDetailData["outreach"];
   disabled: boolean;
   onLog: (providerIds: string[], notes: string) => Promise<OutreachResult>;
+  onEmail: (providerIds: string[]) => Promise<EmailSendResult>;
 }) {
   const [selected, setSelected] = useState<string[]>([]);
   const [notes, setNotes] = useState("");
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
+
+  const contacted = outreach.map(({ entry }) => entry.companyId);
+
+  function skippedText(skipped: { companyId: string; reason: string }[]) {
+    if (!skipped || skipped.length === 0) return "";
+    return (
+      " · " +
+      skipped
+        .map((s) => {
+          const name =
+            providers.find((p) => p.company.id === s.companyId)?.company.legalName ?? s.companyId;
+          return `${name}: ${s.reason}`;
+        })
+        .join(" · ")
+    );
+  }
 
   async function submit() {
     if (selected.length === 0) return;
@@ -345,6 +381,25 @@ function OutreachPanel({
     setNotes("");
   }
 
+  async function sendEmail() {
+    if (selected.length === 0 || sending) return;
+    setSending(true);
+    try {
+      const body = await onEmail(selected);
+      if (body.error) {
+        setFeedback(body.error);
+      } else {
+        const sentCount = body.sent?.length ?? 0;
+        setFeedback(`Emailed ${sentCount} provider(s)${skippedText(body.skipped ?? [])}`);
+        if (sentCount > 0) setSelected([]);
+      }
+    } catch (e) {
+      setFeedback(String(e));
+    } finally {
+      setSending(false);
+    }
+  }
+
   if (disabled) return <Card title="Outreach">Request is closed for outreach.</Card>;
 
   return (
@@ -353,6 +408,17 @@ function OutreachPanel({
         {providers.map(({ company }) => {
           const isSelected = selected.includes(company.id);
           const isContacted = contacted.includes(company.id);
+          const emailEntries = outreach
+            .filter(({ entry }) => entry.companyId === company.id && entry.channel === "email")
+            .map(({ entry }) => entry);
+          const emailEntry = emailEntries[emailEntries.length - 1];
+          const emailStatus = emailEntry?.emailStatus;
+          const emailReason = emailEntry?.emailSkippedReason;
+          const emailClass = emailStatus === "delivered" || emailStatus === "opened"
+            ? "text-green-700"
+            : emailStatus === "bounced" || emailStatus === "skipped" || emailReason
+              ? "text-red-700"
+              : "text-gray-500";
           return (
             <button
               key={company.id}
@@ -374,6 +440,20 @@ function OutreachPanel({
               <span className="inline-block w-3">{isSelected ? "☑" : "☐"}</span>
               {company.legalName}
               {isContacted && <span className="text-xs text-gray-400">(already contacted)</span>}
+              {emailEntry && (emailStatus || emailReason) && (
+                <span className={`text-xs whitespace-nowrap ${emailClass}`}>
+                  {emailReason ? (
+                    <span
+                      className="inline-block max-w-[16rem] truncate align-bottom"
+                      title={emailReason}
+                    >
+                      email: skipped — {emailReason}
+                    </span>
+                  ) : (
+                    `email: ${emailStatus}`
+                  )}
+                </span>
+              )}
             </button>
           );
         })}
@@ -383,13 +463,22 @@ function OutreachPanel({
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
         />
-        <button
-          className="bg-purple-600 text-white px-3 py-1.5 rounded text-sm disabled:opacity-50"
-          disabled={selected.length === 0}
-          onClick={submit}
-        >
-          Log outreach to {selected.length} provider(s)
-        </button>
+        <div className="flex gap-2">
+          <button
+            className="bg-purple-600 text-white px-3 py-1.5 rounded text-sm disabled:opacity-50"
+            disabled={selected.length === 0}
+            onClick={submit}
+          >
+            Log outreach to {selected.length} provider(s)
+          </button>
+          <button
+            className="bg-blue-600 text-white px-3 py-1.5 rounded text-sm disabled:opacity-50"
+            disabled={selected.length === 0 || sending}
+            onClick={sendEmail}
+          >
+            Send by email to {selected.length} provider(s)
+          </button>
+        </div>
         {feedback && <p className="text-xs text-amber-700">{feedback}</p>}
       </div>
     </Card>

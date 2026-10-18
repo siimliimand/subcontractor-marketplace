@@ -90,6 +90,7 @@ Set per environment with `wrangler secret put <NAME> -e staging|production`:
 | `ACCESS_TEAM_DOMAIN` | e.g. `https://<team>.cloudflareaccess.com` (JWT issuer + JWKS host) |
 | `ACCESS_AUD` | Access application AUD tag |
 | `STAFF_ALLOWLIST` | comma-separated staff emails (defence in depth on top of the Access policy) |
+| `EMAIL_TOKEN_SECRET` | HMAC secret for one-click email response tokens (`openssl rand -hex 32`) |
 
 Local equivalents go in `.dev.vars` (gitignored); see `.dev.vars.example`.
 
@@ -103,6 +104,54 @@ Local equivalents go in `.dev.vars` (gitignored); see `.dev.vars.example`.
 3. **Secrets** — put `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`, `STAFF_ALLOWLIST` per environment.
 4. **Verify** — open the Worker URL, complete the Access login round-trip, confirm a
    `login` audit event appears.
+
+## Email pipeline
+
+One-click Accept / Quote / Decline links in outreach emails (no login, single-use
+expiring tokens) plus delivery lifecycle tracking: sent → delivered/bounced → opened,
+with hard-bounced addresses auto-suppressed. Sending uses the Cloudflare Email Service
+`SEND_EMAIL` binding; lifecycle events arrive via a Queue consumer.
+
+Setup, in order:
+
+1. **Verify a sending subdomain (MANUAL, PENDING).** In the Cloudflare dashboard, add a
+   sending subdomain (e.g. `notify.<your-domain>`), create the DNS records and enable
+   Email Sending. Until this is done, sending fails with a config error. The `EMAIL_FROM`
+   values in `wrangler.jsonc` are **placeholders** (`staging-notify.placeholder.invalid` /
+   `notify.placeholder.invalid`) and MUST be updated to the verified sending subdomain
+   before any real sends.
+2. **Create the queues** and attach Email Service event routing to them in the dashboard
+   (`message.delivered`, bounces → the queue):
+
+   ```bash
+   npx wrangler queues create email-events-staging
+   npx wrangler queues create email-events-production
+   ```
+
+3. **Secrets** — one per environment:
+
+   ```bash
+   openssl rand -hex 32                      # value for the secret
+   npx wrangler secret put EMAIL_TOKEN_SECRET -e staging
+   npx wrangler secret put EMAIL_TOKEN_SECRET -e production
+   ```
+
+4. **Deploy + migrate:**
+
+   ```bash
+   npm run db:migrate:staging
+   npm run deploy:staging
+   npm run db:migrate:production
+   npm run deploy:production
+   ```
+
+5. **Warm-up.** `EMAIL_DAILY_LIMIT` (default 50) hard-caps sends per UTC day; start low
+   and raise gradually to protect the new subdomain's reputation. Hard bounces
+   auto-suppress the address — suppressed providers are skipped at batch-send time.
+
+Local development equivalents go in `.dev.vars` (gitignored); see `.dev.vars.example`
+(`EMAIL_TOKEN_SECRET`, `EMAIL_FROM`, optional `EMAIL_REPLY_TO`, `EMAIL_DAILY_LIMIT`,
+`EMAIL_TOKEN_TTL_SECONDS`).
 
 ## Endpoints (all require a valid Access JWT; `GET /api/health` is public)
 

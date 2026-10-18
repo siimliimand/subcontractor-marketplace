@@ -100,9 +100,7 @@ export const responses = sqliteTable(
     availableFrom: text(),
     reason: text(),
     receivedAt: nowIso(),
-    createdBy: text()
-      .notNull()
-      .references(() => users.id),
+    createdBy: text().references(() => users.id),
   },
   (t) => ({
     idx0: index("responses_request_idx").on(t.requestId),
@@ -139,6 +137,10 @@ export const bookings = sqliteTable(
   }),
 );
 
+export const EMAIL_STATUSES = ["sent", "delivered", "bounced", "opened", "skipped"] as const;
+
+export type EmailStatus = (typeof EMAIL_STATUSES)[number];
+
 export const outreachEntries = sqliteTable(
   "outreach_entries",
   {
@@ -154,13 +156,47 @@ export const outreachEntries = sqliteTable(
       .notNull()
       .references(() => users.id),
     channel: text().notNull().default("manual"),
+    emailStatus: text(),
+    emailSkippedReason: text(),
     sentAt: nowIso(),
     notes: text(),
   },
   (t) => ({
     idx0: uniqueIndex("outreach_request_company_unique").on(t.requestId, t.companyId),
     idx1: index("outreach_batch_idx").on(t.batchNumber),
+    idx2: index("outreach_email_status_idx").on(t.emailStatus),
   }),
+);
+
+export const EMAIL_TOKEN_PURPOSES = ["accept", "quote", "decline", "track"] as const;
+
+export type EmailTokenPurpose = (typeof EMAIL_TOKEN_PURPOSES)[number];
+
+export const emailTokens = sqliteTable(
+  "email_tokens",
+  {
+    id: uuid().primaryKey(),
+    jti: text().notNull().unique(),
+    outreachEntryId: text()
+      .notNull()
+      .references(() => outreachEntries.id, { onDelete: "cascade" }),
+    purpose: text().notNull(),
+    expiresAt: text().notNull(),
+    usedAt: text(),
+    createdAt: nowIso(),
+  },
+  (t) => ({
+    idx0: index("email_tokens_entry_idx").on(t.outreachEntryId),
+  }),
+);
+
+export const emailSuppressions = sqliteTable(
+  "email_suppressions",
+  {
+    email: text().primaryKey(),
+    reason: text().notNull(),
+    createdAt: nowIso(),
+  },
 );
 
 export const auditEvents = sqliteTable(

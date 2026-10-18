@@ -20,6 +20,14 @@
       "database_id": "local"
     }
   ],
+  // Email Service send binding for `wrangler dev`.
+  // Sending only works once the sending subdomain is verified in the Cloudflare
+  // dashboard (manual step; see README "Email pipeline").
+  "send_email": [{ "name": "SEND_EMAIL" }],
+  // Warm-up cap: max emails sent per UTC day (D1-counted). Start low, ramp slowly.
+  "vars": {
+    "EMAIL_DAILY_LIMIT": "50"
+  },
   "env": {
     "staging": {
       "name": "concierge-cockpit-staging",
@@ -29,7 +37,20 @@
           "database_name": "cockpit-staging",
           "database_id": "53e6e61f-ce10-4197-b091-b02662db95fe"
         }
-      ]
+      ],
+      // PENDING: replace the placeholder subdomain with the verified sending
+      // subdomain before any real sends (see README "Email pipeline").
+      // NOTE: wrangler 3.x does not inherit vars/send_email into environments,
+      // so these are repeated per env; the top-level entries cover `wrangler dev`.
+      "vars": {
+        "EMAIL_FROM": "Subcrew Staging <outreach@staging-notify.placeholder.invalid>",
+        "EMAIL_REPLY_TO": "siim.liimand@gmail.com",
+        "EMAIL_DAILY_LIMIT": "50"
+      },
+      "send_email": [{ "name": "SEND_EMAIL" }],
+      "queues": {
+        "consumers": [{ "queue": "email-events-staging" }]
+      }
     },
     "production": {
       "name": "concierge-cockpit-production",
@@ -39,7 +60,18 @@
           "database_name": "cockpit-production",
           "database_id": "d4f98dd6-fdc5-40bf-8bf7-c31bbb0ac7ab"
         }
-      ]
+      ],
+      // PENDING: replace the placeholder subdomain with the verified sending
+      // subdomain before any real sends (see README "Email pipeline").
+      "vars": {
+        "EMAIL_FROM": "Subcrew <outreach@notify.placeholder.invalid>",
+        "EMAIL_REPLY_TO": "siim.liimand@gmail.com",
+        "EMAIL_DAILY_LIMIT": "50"
+      },
+      "send_email": [{ "name": "SEND_EMAIL" }],
+      "queues": {
+        "consumers": [{ "queue": "email-events-production" }]
+      }
     }
   }
 }

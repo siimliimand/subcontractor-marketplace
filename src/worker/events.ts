@@ -7,6 +7,10 @@ export const EVENT_ACTIONS = [
   "request_approved",
   "matched",
   "outreach_sent",
+  "email_sent",
+  "email_delivered",
+  "email_bounced",
+  "email_opened",
   "response_received",
   "qualified_response",
   "quote_submitted",
@@ -29,8 +33,8 @@ export function isEventAction(value: string): value is EventAction {
 }
 
 export type AuditEventInput = {
-  actorUserId: string;
-  actorEmail: string;
+  actorUserId: string | null;
+  actorEmail: string | null;
   entity: string;
   entityId?: string | null;
   action: EventAction;

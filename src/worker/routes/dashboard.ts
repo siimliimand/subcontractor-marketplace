@@ -26,6 +26,15 @@ type Metrics = {
   medianHoursToFirstQualified: number | null;
 };
 
+type EmailMetrics = {
+  sent: number;
+  delivered: number;
+  bounced: number;
+  opened: number;
+  automatedQualified: number;
+  manualQualified: number;
+};
+
 dashboardRouter.get("/overview", async (c) => {
   const db = drizzle(c.env.DB);
   const from = c.req.query("from") ?? "1970-01-01";
@@ -136,7 +145,41 @@ dashboardRouter.get("/overview", async (c) => {
       conversionDenominator.length === 0 ? null : converted.length / conversionDenominator.length,
     medianHoursToFirstQualified: medianHours,
   };
-  return c.json(metrics);
+  // Email pipeline counts: lifecycle events plus automated-vs-manual qualified split
+  const emailActionRows = await db.all<{ action: string; n: number }>(sql`
+    SELECT action, COUNT(*) AS n
+    FROM audit_events
+    WHERE action IN ('email_sent', 'email_delivered', 'email_bounced', 'email_opened')
+    GROUP BY action
+  `);
+  const actionCounts = new Map(
+    (emailActionRows as unknown as Array<{ action: string; n: number }>).map((r) => [
+      r.action,
+      Number(r.n),
+    ]),
+  );
+  const qualifiedChannelRows = await db.all<{ channel: string; n: number }>(sql`
+    SELECT channel, COUNT(*) AS n
+    FROM audit_events
+    WHERE action = 'qualified_response'
+    GROUP BY channel
+  `);
+  const channelCounts = new Map(
+    (qualifiedChannelRows as unknown as Array<{ channel: string; n: number }>).map((r) => [
+      r.channel,
+      Number(r.n),
+    ]),
+  );
+  const email: EmailMetrics = {
+    sent: actionCounts.get("email_sent") ?? 0,
+    delivered: actionCounts.get("email_delivered") ?? 0,
+    bounced: actionCounts.get("email_bounced") ?? 0,
+    opened: actionCounts.get("email_opened") ?? 0,
+    automatedQualified: channelCounts.get("automated") ?? 0,
+    manualQualified: channelCounts.get("manual") ?? 0,
+  };
+
+  return c.json({ ...metrics, email });
 });
 
 dashboardRouter.get("/supply", async (c) => {

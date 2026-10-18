@@ -10,6 +10,14 @@ type Metrics = {
   successRate: number | null;
   conversion: number | null;
   medianHoursToFirstQualified: number | null;
+  email?: {
+    sent: number;
+    delivered: number;
+    bounced: number;
+    opened: number;
+    automatedQualified: number;
+    manualQualified: number;
+  };
 };
 
 type SupplyRow = {
@@ -117,6 +125,24 @@ export default function Dashboard() {
             detail={`${metrics.numerator.booked} of ${metrics.denominators.conversion} (open requests excluded)`}
           />
         </div>
+      )}
+
+      {metrics?.email && (
+        <section className="mb-8">
+          <h2 className="font-semibold mb-2">Email pipeline</h2>
+          <div className="bg-white p-4 rounded border text-sm">
+            <p>
+              Sent <span className="font-semibold">{metrics.email.sent}</span> · Delivered{" "}
+              <span className="font-semibold">{metrics.email.delivered}</span> · Bounced{" "}
+              <span className="font-semibold">{metrics.email.bounced}</span> · Opened{" "}
+              <span className="font-semibold">{metrics.email.opened}</span>
+            </p>
+            <p className="text-gray-600 mt-1">
+              Responses: {metrics.email.automatedQualified} automated ·{" "}
+              {metrics.email.manualQualified} manual
+            </p>
+          </div>
+        </section>
       )}
 
       <section className="mb-8">

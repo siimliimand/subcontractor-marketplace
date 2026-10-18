@@ -55,9 +55,12 @@ export type BookingRow = {
 
 export type OutreachRow = Service & {
   batchNumber: string;
+  channel: string;
   sentAt: string;
   notes: string | null;
   contactedBy: string;
+  emailStatus?: "sent" | "delivered" | "bounced" | "opened" | "skipped" | null;
+  emailSkippedReason?: string | null;
 };
 
 export type TimeEntryRow = {

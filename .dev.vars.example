@@ -10,3 +10,18 @@ ACCESS_AUD=your-access-audience-tag
 
 # Comma-separated staff email allowlist
 STAFF_ALLOWLIST=you@example.com
+
+# HMAC secret for one-click email response tokens (generate with `openssl rand -hex 32`)
+EMAIL_TOKEN_SECRET=generate-with-openssl-rand-hex-32
+
+# From address for outbound email, e.g. Subcrew <outreach@notify.example.com>
+EMAIL_FROM=Subcrew <outreach@notify.example.com>
+
+# Optional Reply-To address (defaults to no explicit Reply-To)
+#EMAIL_REPLY_TO=you@example.com
+
+# Optional daily send cap for domain warm-up (default 50)
+#EMAIL_DAILY_LIMIT=50
+
+# Optional email token time-to-live in seconds (default 604800 = 7 days)
+#EMAIL_TOKEN_TTL_SECONDS=604800
