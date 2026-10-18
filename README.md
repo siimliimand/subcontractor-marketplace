@@ -61,6 +61,24 @@ npm run deploy:production  # build UI + wrangler deploy -e production
 
 Rollback: `npx wrangler rollback -e <env>` (verified working).
 
+## Staging data reset
+
+Wipes all pilot data on staging (production is never reset this way). Staff users are
+re-provisioned automatically from the Access JWT on next login.
+
+```bash
+npx wrangler d1 execute cockpit-staging -e staging --remote --file ops/staging-reset.sql -y
+```
+
+Verify afterwards: `GET /api/dashboard/overview` returns zeroes and the providers list
+is empty.
+
+## CI
+
+`.github/workflows/ci.yml` runs typecheck, the 41 integration tests and the build on
+every push to `main` and on pull requests. Requires the repo to be pushed to GitHub
+with Actions enabled.
+
 ## Secrets (never committed)
 
 Set per environment with `wrangler secret put <NAME> -e staging|production`:
