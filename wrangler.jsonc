@@ -3,6 +3,7 @@
   "name": "concierge-cockpit",
   "main": "src/worker/index.ts",
   "compatibility_date": "2024-11-01",
+  "compatibility_flags": ["nodejs_compat"],
   "assets": {
     "directory": "./dist/ui",
     "not_found_handling": "single-page-application",
@@ -15,15 +16,9 @@
       "database_id": "local"
     }
   ],
-  "vars": {
-    "ACCESS_TEAM_DOMAIN": "https://example.cloudflareaccess.com"
-  },
   "env": {
     "staging": {
       "name": "concierge-cockpit-staging",
-      "vars": {
-        "ACCESS_TEAM_DOMAIN": "https://staging.cloudflareaccess.com"
-      },
       "d1_databases": [
         {
           "binding": "DB",
@@ -34,9 +29,6 @@
     },
     "production": {
       "name": "concierge-cockpit-production",
-      "vars": {
-        "ACCESS_TEAM_DOMAIN": "https://production.cloudflareaccess.com"
-      },
       "d1_databases": [
         {
           "binding": "DB",

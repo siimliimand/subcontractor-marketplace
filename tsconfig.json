@@ -12,7 +12,7 @@
     "skipLibCheck": true,
     "isolatedModules": true,
     "noEmit": true,
-    "types": ["@cloudflare/workers-types", "vite/client"]
+    "types": ["@cloudflare/workers-types", "vite/client", "@cloudflare/vitest-pool-workers"]
   },
-  "include": ["src", "test", "vite.config.ts", "drizzle.config.ts"]
+  "include": ["src", "test", "vite.config.ts", "drizzle.config.ts", "vitest.config.ts"]
 }
