@@ -202,12 +202,12 @@ The biggest risks are an empty marketplace, users leaving the platform after the
 
 ## 12. Decisions for the partner meeting
 
-- [ ] **Pilot segment:** interior fit-out in Tallinn and Harju county, or another trade cluster or region?
-- [ ] **Booking system:** build our own or adapt an existing scheduling component?
-- [ ] **MVP scope:** confirm the in/out list in section 7.
-- [ ] **Team and budget:** who builds, who sells, and how much time and money each partner commits until the next gate.
-- [ ] **Company and legal set-up:** entity, ownership split, terms of use, GDPR review.
-- [ ] **Success criteria:** numeric targets and the point at which we stop, change or expand.
+- [x] **Pilot segment:** interior fit-out in Tallinn and Harju county → **locked** (decision log #1)
+- [x] **Booking system:** build our own → **locked, build fully on D1; calendar sync deferred** (decision log #2)
+- [x] **MVP scope:** confirmed, with multi-trade requests added → **locked** (decision log #3)
+- [x] **Team and budget:** solo founder + AI-assisted build, bootstrapped → **locked** (decision log #4)
+- [x] **Company and legal set-up:** pilot under existing OÜ; ToS + GDPR drafts done, lawyer review before real provider data (decision log #5)
+- [x] **Success criteria:** targets + kill/pivot criteria confirmed as provisional; single revision at day-30 synthesis (decision log #6)
 
 Every decision gets an owner and a deadline.
 
@@ -225,14 +225,14 @@ No substantial development starts until responsibility for delivering and operat
 
 ## 14. Next 30 days
 
-- [ ] Hold the partner meeting and settle the decisions above
+- [x] Hold the partner meeting and settle the decisions above → decision log, 18 Oct 2026
 - [ ] Write interview guides for project managers and contractors
 - [ ] Complete the interviews (~10 PMs, ~15 contractors)
 - [ ] Research existing Estonian portals, procurement tools and scheduling software
-- [ ] Check access and terms for the public registers listed in section 6
-- [ ] Draft the data model: provider, service, capacity, request, response, booking, outreach
-- [ ] Sketch key screens: provider onboarding, request via AI chat, response email, availability view
-- [ ] Define analytics events for the full funnel before the first line of product code
+- [x] Check access and terms for the public registers listed in section 6 → `docs/phase0/register-findings.md`
+- [x] Draft the data model: provider, service, capacity, request, response, booking, outreach → `docs/phase0/data-model-erd.md` (live schema + Phase 2 migrations)
+- [x] Sketch key screens: provider onboarding, request via AI chat, response email, availability view → `docs/phase0/wireframes.md`
+- [x] Define analytics events for the full funnel before the first line of product code → `docs/phase0/event-tracking-plan.md` (implemented in cockpit; rest mapped per phase)
 
 **Deliverable at day 30:** prioritised MVP specification, 60-day delivery plan, cost estimate, and an explicit go/no-go decision.
 
