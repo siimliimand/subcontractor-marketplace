@@ -1,0 +1,12 @@
+# Local development secrets — copy to .dev.vars (gitignored) and fill in.
+# In deployed environments, set these with `wrangler secret put <NAME> -e <env>`.
+# Never commit real values.
+
+# Cloudflare Access team domain, e.g. https://<your-team>.cloudflareaccess.com
+ACCESS_TEAM_DOMAIN=https://your-team.cloudflareaccess.com
+
+# Access application AUD tag (shown in the Access application settings)
+ACCESS_AUD=your-access-audience-tag
+
+# Comma-separated staff email allowlist
+STAFF_ALLOWLIST=you@example.com

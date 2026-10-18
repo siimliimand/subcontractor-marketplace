@@ -19,7 +19,7 @@ export type AppEnv = { Bindings: Bindings; Variables: { user: AccessUser } };
 export function createApp() {
   const app = new Hono<AppEnv>();
 
-  app.get("/api/health", (c) => c.json({ ok: true, ts: new Date().toISOString(), dbg: { td: !!c.env.ACCESS_TEAM_DOMAIN, aud: c.env.ACCESS_AUD ?? null, al: c.env.STAFF_ALLOWLIST ?? null } }));
+  app.get("/api/health", (c) => c.json({ ok: true, ts: new Date().toISOString() }));
 
   app.use("/api/*", requireStaff);
 

@@ -50,11 +50,11 @@
 
 ## 8. Funnel dashboard
 
-- [ ] 8.1 Overview queries: eligible requests, qualified-response-within-24h rate, median time to first qualified response (business hours, Europe/Tallinn), booking conversion — computed from audit events
-- [ ] 8.2 Denominator rules encoded: customer-cancelled excluded from success rate, open requests excluded from conversion, automated responses excluded from time-to-response
-- [ ] 8.3 Supply view: active providers by trade with per-trade pilot minimums marked met/unmet
-- [ ] 8.4 Effort view: minutes + interventions per request and weekly trend
-- [ ] 8.5 UI: read-only dashboard pages with numerators/denominators shown; verify against seeded sample data
+- [x] 8.1 Overview queries: eligible requests, qualified-response-within-24h rate, median time to first qualified response (business hours, Europe/Tallinn), booking conversion — computed from audit events
+- [x] 8.2 Denominator rules encoded: customer-cancelled excluded from success rate, open requests excluded from conversion, automated responses excluded from time-to-response
+- [x] 8.3 Supply view: active providers by trade with per-trade pilot minimums marked met/unmet
+- [x] 8.4 Effort view: minutes + interventions per request and weekly trend
+- [x] 8.5 UI: read-only dashboard pages with numerators/denominators shown; verify against seeded sample data
 
 ## 9. Production rollout
 
