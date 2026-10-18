@@ -95,7 +95,7 @@ function briefHtml(brief: Brief): string {
 }
 
 function formPage(
-  jti: string,
+  token: string,
   purpose: "accept" | "quote",
   brief: Brief,
   error?: string,
@@ -104,7 +104,7 @@ function formPage(
   return page(
     `${briefHtml(brief)}
 ${error ? `<p style="color:#b91c1c;font-size:14px">${escapeHtml(error)}</p>` : ""}
-<form method="post" action="/e/${escapeHtml(jti)}" style="margin-top:16px">
+<form method="post" action="/e/${escapeHtml(token)}" style="margin-top:16px">
 <label style="display:block;font-weight:600;font-size:14px" for="workersCount">How many workers can you commit?</label>
 <input type="number" id="workersCount" name="workersCount" min="1" step="1" required value="1"
   style="display:block;margin:4px 0 12px;padding:8px;border:1px solid #d1d5db;border-radius:6px;width:120px" />
@@ -118,12 +118,12 @@ ${error ? `<p style="color:#b91c1c;font-size:14px">${escapeHtml(error)}</p>` : "
   );
 }
 
-function declinePage(jti: string, brief: Brief, error?: string): Response {
+function declinePage(token: string, brief: Brief, error?: string): Response {
   return page(
     `${briefHtml(brief)}
 <p style="font-size:14px">Please confirm that your company is not taking this work. This cannot be undone.</p>
 ${error ? `<p style="color:#b91c1c;font-size:14px">${escapeHtml(error)}</p>` : ""}
-<form method="post" action="/e/${escapeHtml(jti)}" style="margin-top:16px">
+<form method="post" action="/e/${escapeHtml(token)}" style="margin-top:16px">
 <label style="display:block;font-weight:600;font-size:14px" for="reason">Reason (optional)</label>
 <textarea id="reason" name="reason" rows="3"
   style="display:block;margin:4px 0 16px;padding:8px;border:1px solid #d1d5db;border-radius:6px;width:100%;box-sizing:border-box"></textarea>
@@ -189,7 +189,8 @@ export function createPublicApp() {
 
   app.get("/e/:token", async (c) => {
     const db = drizzle(c.env.DB);
-    const verified = await verifyHelper(c.req.param("token"), c.env);
+    const token = c.req.param("token");
+    const verified = await verifyHelper(token, c.env);
     if (!verified || verified.purpose === "track") return neutral();
 
     const tokenRow = (
@@ -209,13 +210,14 @@ export function createPublicApp() {
     const brief = await loadBrief(db, tokenRow.outreachEntryId);
     if (!brief) return neutral();
 
-    if (verified.purpose === "decline") return declinePage(verified.jti, brief);
-    return formPage(verified.jti, verified.purpose, brief);
+    if (verified.purpose === "decline") return declinePage(token, brief);
+    return formPage(token, verified.purpose, brief);
   });
 
   app.post("/e/:token", async (c) => {
     const db = drizzle(c.env.DB);
-    const verified = await verifyHelper(c.req.param("token"), c.env);
+    const token = c.req.param("token");
+    const verified = await verifyHelper(token, c.env);
     if (!verified || verified.purpose === "track") return neutral();
 
     const tokenRow = (
@@ -258,7 +260,7 @@ export function createPublicApp() {
         const brief = await loadBrief(db, entry.entry.id);
         if (!brief) return neutral();
         return formPage(
-          verified.jti,
+          token,
           purpose,
           brief,
           "Please provide the number of workers (at least 1) and the available-from date.",

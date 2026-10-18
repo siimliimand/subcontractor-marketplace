@@ -133,6 +133,28 @@ function submitForm(token: string, body: Record<string, string>) {
   });
 }
 
+function parseFormAction(html: string): string {
+  const match = html.match(/<form[^>]*\saction="([^"]*)"/);
+  expect(match).not.toBeNull();
+  return match![1]!;
+}
+
+async function landingAction(token: string): Promise<string> {
+  const get = await landing(token);
+  expect(get.status).toBe(200);
+  const action = parseFormAction(await get.text());
+  expect(action).toBe(`/e/${token}`);
+  return action;
+}
+
+function submitToAction(action: string, body: Record<string, string>) {
+  return SELF.fetch(`https://example.com${action}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams(body).toString(),
+  });
+}
+
 describe("public token response flow", () => {
   it("accept flow: landing shows brief + form, submit records response and consumes all tokens", async () => {
     const providerId = await createProvider(0);
@@ -151,10 +173,12 @@ describe("public token response flow", () => {
     const html = await get.text();
     expect(html).toContain(request.title);
     expect(html).toContain("<form");
+    // The form must post back to the SAME signed-token URL, not the raw jti
+    expect(parseFormAction(html)).toBe(`/e/${tokens.accept}`);
     // No internal identifiers leak onto the page
     expect(html).not.toContain(request.id);
 
-    const post = await submitForm(tokens.accept, {
+    const post = await submitToAction(parseFormAction(html), {
       workersCount: "3",
       availableFrom: "2026-12-01",
     });
@@ -218,7 +242,8 @@ describe("public token response flow", () => {
       await db().select().from(companies).where(eq(companies.id, providerId))
     )[0]!;
 
-    const post = await submitForm(tokens.decline, { reason: "Fully booked" });
+    const declineAction = await landingAction(tokens.decline);
+    const post = await submitToAction(declineAction, { reason: "Fully booked" });
     expect(post.status).toBe(200);
     expect(await post.text()).toMatch(/Thank you/i);
 
@@ -249,7 +274,8 @@ describe("public token response flow", () => {
     const requestId = await createMatchedRequest();
     const tokens = await sendAndGetTokens(requestId, providerId);
 
-    const post = await submitForm(tokens.quote, {
+    const quoteAction = await landingAction(tokens.quote);
+    const post = await submitToAction(quoteAction, {
       workersCount: "4",
       availableFrom: "2026-11-20",
     });
