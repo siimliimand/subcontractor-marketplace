@@ -21,10 +21,10 @@
 
 ## 4. Provider administration
 
-- [ ] 4.1 API: create provider (legal name, registration identifier unique, contact email required), list/search/filter by trade, status, service area
-- [ ] 4.2 API: services CRUD with trade/pricing-model validation; status lifecycle (`active`/`inactive`/`opted_out`) with timestamp + reason; `opted_out` blocks future outreach
-- [ ] 4.3 UI: provider list, provider detail with services, create/edit forms
-- [ ] 4.4 Events: `provider_created`, `provider_updated` written via the event helper; tests for uniqueness and validation errors
+- [x] 4.1 API: create provider (legal name, registration identifier unique, contact email required), list/search/filter by trade, status, service area
+- [x] 4.2 API: services CRUD with trade/pricing-model validation; status lifecycle (`active`/`inactive`/`opted_out`) with timestamp + reason; `opted_out` blocks future outreach
+- [x] 4.3 UI: provider list, provider detail with services, create/edit forms
+- [x] 4.4 Events: `provider_created`, `provider_updated` written via the event helper; tests for uniqueness and validation errors
 
 ## 5. Request administration
 

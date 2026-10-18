@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { requireStaff, type AccessUser } from "./auth";
 import { providersRouter } from "./routes/providers";
+import { requestsRouter } from "./routes/requests";
 
 export type Bindings = {
   DB: D1Database;
@@ -22,6 +23,7 @@ export function createApp() {
   app.get("/api/me", (c) => c.json(c.get("user")));
 
   app.route("/api/providers", providersRouter);
+  app.route("/api/requests", requestsRouter);
 
   return app;
 }

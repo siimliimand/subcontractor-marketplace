@@ -1,27 +1,12 @@
-import { describe, it, expect, beforeAll, afterEach, inject } from "vitest";
-import { fetchMock, SELF, env } from "cloudflare:test";
-import { makeAccessKey, makeAccessToken, accessHeaders, TEAM_DOMAIN } from "./helpers/access";
+import { describe, it, expect, afterEach } from "vitest";
+import { SELF, env } from "cloudflare:test";
+import { makeAccessKey, makeAccessToken, accessHeaders } from "./helpers/access";
 import { users, auditEvents } from "../src/worker/db/schema";
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
 
 const db = () => drizzle(env.DB);
-
-beforeAll(async () => {
-  const { publicJwk } = await makeAccessPublicKey();
-  fetchMock.activate();
-  fetchMock.get(TEAM_DOMAIN).intercept({ path: "/cdn-cgi/access/certs" }).reply(
-    200,
-    JSON.stringify({ keys: [publicJwk] }),
-    { headers: { "Content-Type": "application/json" } },
-  ).persist();
-});
-
-let accessKey: Awaited<ReturnType<typeof makeAccessKey>>;
-async function makeAccessPublicKey() {
-  accessKey = await makeAccessKey();
-  return accessKey;
-}
+const accessKey = () => (globalThis as any).__testAccessKey;
 
 afterEach(async () => {
   await db().delete(auditEvents);
@@ -44,7 +29,7 @@ describe("staff access", () => {
   });
 
   it("rejects wrong audience with 403", async () => {
-    const token = await makeAccessToken(accessKey.privateKey, {
+    const token = await makeAccessToken(accessKey().privateKey, {
       email: "staff@example.com",
       aud: "other-audience",
     });
@@ -53,7 +38,7 @@ describe("staff access", () => {
   });
 
   it("rejects wrong issuer with 403", async () => {
-    const token = await makeAccessToken(accessKey.privateKey, {
+    const token = await makeAccessToken(accessKey().privateKey, {
       email: "staff@example.com",
       iss: "https://evil.example.com",
     });
@@ -62,7 +47,7 @@ describe("staff access", () => {
   });
 
   it("provisions allowlisted staff on first login and records login event", async () => {
-    const token = await makeAccessToken(accessKey.privateKey, { email: "Staff@Example.com" });
+    const token = await makeAccessToken(accessKey().privateKey, { email: "Staff@Example.com" });
     const res = await SELF.fetch("https://example.com/api/me", { headers: accessHeaders(token) });
     expect(res.status).toBe(200);
     const me = (await res.json()) as { id: string; email: string };
@@ -79,7 +64,7 @@ describe("staff access", () => {
   });
 
   it("reuses the user record on repeat login", async () => {
-    const token = await makeAccessToken(accessKey.privateKey, { email: "staff@example.com" });
+    const token = await makeAccessToken(accessKey().privateKey, { email: "staff@example.com" });
     const res1 = await SELF.fetch("https://example.com/api/me", { headers: accessHeaders(token) });
     const me1 = (await res1.json()) as { id: string };
     const res2 = await SELF.fetch("https://example.com/api/me", { headers: accessHeaders(token) });
@@ -90,7 +75,7 @@ describe("staff access", () => {
   });
 
   it("denies non-allowlisted email with 403 and records access_denied", async () => {
-    const token = await makeAccessToken(accessKey.privateKey, { email: "outsider@example.com" });
+    const token = await makeAccessToken(accessKey().privateKey, { email: "outsider@example.com" });
     const res = await SELF.fetch("https://example.com/api/me", { headers: accessHeaders(token) });
     expect(res.status).toBe(403);
     const events = await db()

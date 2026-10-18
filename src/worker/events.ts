@@ -3,6 +3,7 @@ import { auditEvents } from "./db/schema";
 
 export const EVENT_ACTIONS = [
   "request_created",
+  "request_updated",
   "request_approved",
   "matched",
   "outreach_sent",

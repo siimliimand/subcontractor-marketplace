@@ -1,30 +1,18 @@
-import { describe, it, expect, beforeAll, afterEach } from "vitest";
-import { fetchMock, SELF, env } from "cloudflare:test";
-import { makeAccessKey, makeAccessToken, accessHeaders, TEAM_DOMAIN } from "./helpers/access";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { SELF, env } from "cloudflare:test";
+import { makeAccessToken, accessHeaders } from "./helpers/access";
 import { auditEvents, companies, users } from "../src/worker/db/schema";
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
 
 const db = () => drizzle(env.DB);
 
-let accessKey: Awaited<ReturnType<typeof makeAccessKey>>;
+const accessKey = () => (globalThis as any).__testAccessKey;
 let authHeaders: Record<string, string>;
 
-beforeAll(async () => {
-  accessKey = await makeAccessKey();
-  fetchMock.activate();
-  fetchMock.get(TEAM_DOMAIN).intercept({ path: "/cdn-cgi/access/certs" }).reply(
-    200,
-    JSON.stringify({ keys: [accessKey.publicJwk] }),
-    { headers: { "Content-Type": "application/json" } },
-  ).persist();
-  await SELF.fetch("https://example.com/api/me", {
-    headers: accessHeaders(
-      await makeAccessToken(accessKey.privateKey, { email: "staff@example.com" }),
-    ),
-  });
+beforeEach(async () => {
   authHeaders = accessHeaders(
-    await makeAccessToken(accessKey.privateKey, { email: "staff@example.com" }),
+    await makeAccessToken(accessKey().privateKey, { email: "staff@example.com" }),
   );
 });
 
