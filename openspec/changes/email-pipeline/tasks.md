@@ -41,7 +41,7 @@
 
 - [x] 7.1 Apply migration 0002 `--remote` to staging and production
 - [ ] 7.2 Verify sending subdomain in Cloudflare dashboard (manual: DNS records, SPF/DKIM); start warm-up with low `EMAIL_DAILY_LIMIT`
-- [ ] 7.3 Set staging secrets (`EMAIL_TOKEN_SECRET`, sending address); deploy staging
+- [x] 7.3 Set staging secrets (`EMAIL_TOKEN_SECRET`, sending address); deploy staging
 - [ ] 7.4 Staging e2e: create provider + request, send batch to a real test address, open pixel, click Accept with capacity → confirm `response_received` + `qualified_response` + `email_opened` in audit events and dashboard movement; decline path on a second provider
 - [ ] 7.5 Set production secrets; deploy production; repeat e2e with a production test address
 - [ ] 7.6 Update README (email setup, secrets, warm-up procedure) and mark implementation-plan Phase 1 wk3 item done
