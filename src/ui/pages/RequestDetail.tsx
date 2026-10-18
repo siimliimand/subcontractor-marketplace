@@ -162,6 +162,22 @@ export default function RequestDetail() {
               </div>
             </Card>
           )}
+
+          <OutreachPanel
+            providers={providers}
+            contacted={data.outreach.map(({ entry }) => entry.companyId)}
+            disabled={["booked", "cancelled", "closed"].includes(r.status)}
+            onLog={async (providerIds, notes) => {
+              const res = await fetch(`/api/requests/${id}/outreach`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ providerIds, notes }),
+              });
+              const body = (await res.json()) as OutreachResult;
+              await load();
+              return body;
+            }}
+          />
         </div>
 
         <div className="space-y-4">
@@ -202,6 +218,95 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
       <h2 className="text-sm font-semibold mb-2">{title}</h2>
       {children}
     </div>
+  );
+}
+
+type OutreachResult = {
+  batchNumber?: string;
+  accepted?: string[];
+  rejected?: { companyId: string; reason: string }[];
+  error?: string;
+};
+
+function OutreachPanel({
+  providers,
+  contacted,
+  disabled,
+  onLog,
+}: {
+  providers: { company: { id: string; legalName: string } }[];
+  contacted: string[];
+  disabled: boolean;
+  onLog: (providerIds: string[], notes: string) => Promise<OutreachResult>;
+}) {
+  const [selected, setSelected] = useState<string[]>([]);
+  const [notes, setNotes] = useState("");
+  const [feedback, setFeedback] = useState<string | null>(null);
+
+  async function submit() {
+    if (selected.length === 0) return;
+    const body = await onLog(selected, notes);
+    if (body.rejected && body.rejected.length > 0) {
+      setFeedback(
+        body.rejected
+          .map((rj) => {
+            const name =
+              providers.find((p) => p.company.id === rj.companyId)?.company.legalName ??
+              rj.companyId;
+            return `${name}: ${rj.reason}`;
+          })
+          .join(" · "),
+      );
+    } else if (body.error) {
+      setFeedback(body.error);
+    } else {
+      setFeedback(`Batch ${body.batchNumber} logged to ${body.accepted?.length ?? 0} providers`);
+    }
+    setSelected([]);
+    setNotes("");
+  }
+
+  if (disabled) return <Card title="Outreach">Request is closed for outreach.</Card>;
+
+  return (
+    <Card title="Log outreach batch">
+      <div className="space-y-2 text-sm">
+        {providers.map(({ company }) => (
+          <label key={company.id} className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={selected.includes(company.id)}
+              disabled={contacted.includes(company.id)}
+              onChange={(e) =>
+                setSelected(
+                  e.target.checked
+                    ? [...selected, company.id]
+                    : selected.filter((sid) => sid !== company.id),
+                )
+              }
+            />
+            {company.legalName}
+            {contacted.includes(company.id) && (
+              <span className="text-xs text-gray-400">(already contacted)</span>
+            )}
+          </label>
+        ))}
+        <input
+          className="border rounded p-1.5 w-full"
+          placeholder="Batch notes (optional)"
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+        />
+        <button
+          className="bg-purple-600 text-white px-3 py-1.5 rounded text-sm disabled:opacity-50"
+          disabled={selected.length === 0}
+          onClick={submit}
+        >
+          Log outreach to {selected.length} provider(s)
+        </button>
+        {feedback && <p className="text-xs text-amber-700">{feedback}</p>}
+      </div>
+    </Card>
   );
 }
 
