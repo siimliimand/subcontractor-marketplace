@@ -3,6 +3,7 @@ import { requireStaff, type AccessUser } from "./auth";
 import { providersRouter } from "./routes/providers";
 import { requestsRouter } from "./routes/requests";
 import { outreachRouter } from "./routes/outreach";
+import { effortRouter } from "./routes/effort";
 
 export type Bindings = {
   DB: D1Database;
@@ -26,6 +27,7 @@ export function createApp() {
   app.route("/api/providers", providersRouter);
   app.route("/api/requests", requestsRouter);
   app.route("/api", outreachRouter);
+  app.route("/api", effortRouter);
 
   return app;
 }

@@ -15,6 +15,7 @@ export default function RequestDetail() {
   const { id } = useParams<{ id: string }>();
   const [data, setData] = useState<RequestDetailData | null>(null);
   const [providers, setProviders] = useState<{ company: { id: string; legalName: string } }[]>([]);
+  const [effort, setEffort] = useState<{ totalMinutes: number; manualEvents: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function load() {
@@ -22,6 +23,7 @@ export default function RequestDetail() {
     try {
       const detail = await get<RequestDetailData>(`/requests/${id}`);
       setData(detail);
+      setEffort(await get(`/requests/${id}/effort`));
       setError(null);
     } catch (e) {
       setError(String(e));
@@ -178,6 +180,14 @@ export default function RequestDetail() {
               return body;
             }}
           />
+
+          <TimePanel
+            onLog={async (minutes, note) => {
+              await action("/time", { minutes, note });
+            }}
+          />
+
+          <EffortSummary effort={effort} />
         </div>
 
         <div className="space-y-4">
@@ -209,6 +219,71 @@ export default function RequestDetail() {
         </div>
       </div>
     </div>
+  );
+}
+
+function TimePanel({
+  onLog,
+}: {
+  onLog: (minutes: number, note: string) => Promise<void>;
+}) {
+  const [minutes, setMinutes] = useState("");
+  const [note, setNote] = useState("");
+  const [msg, setMsg] = useState<string | null>(null);
+
+  return (
+    <Card title="Log manual time">
+      <form
+        onSubmit={async (e) => {
+          e.preventDefault();
+          try {
+            await onLog(Number(minutes), note);
+            setMsg("Time logged");
+            setMinutes("");
+            setNote("");
+          } catch (err) {
+            setMsg(String(err));
+          }
+        }}
+        className="flex gap-2 items-center text-sm"
+      >
+        <input
+          className="border rounded p-1.5 w-24"
+          type="number"
+          min="1"
+          required
+          placeholder="Minutes"
+          value={minutes}
+          onChange={(e) => setMinutes(e.target.value)}
+        />
+        <input
+          className="border rounded p-1.5 flex-1"
+          placeholder="What was done?"
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+        />
+        <button className="bg-blue-600 text-white px-3 py-1.5 rounded text-sm">Log</button>
+      </form>
+      {msg && <p className="text-xs text-gray-500 mt-1">{msg}</p>}
+    </Card>
+  );
+}
+
+function EffortSummary({
+  effort,
+}: {
+  effort: { totalMinutes: number; manualEvents: number } | null;
+}) {
+  if (!effort) return null;
+  const hours = Math.floor(effort.totalMinutes / 60);
+  const mins = effort.totalMinutes % 60;
+  return (
+    <Card title="Effort rollup">
+      <p className="text-sm text-gray-700">
+        <span className="font-semibold">{hours}h {mins}m</span> logged ·{" "}
+        <span className="font-semibold">{effort.manualEvents}</span> manual interventions
+      </p>
+    </Card>
   );
 }
 

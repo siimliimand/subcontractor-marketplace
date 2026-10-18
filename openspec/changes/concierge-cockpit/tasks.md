@@ -38,9 +38,9 @@
 
 ## 6. Outreach log
 
-- [ ] 6.1 API: log outreach batch (shared batch number) with per-provider entries (contacted-by, channel `manual`, sent-at, notes); reject duplicate provider-request pairs; reject opted-out providers; reject after `booked`/`cancelled`
-- [ ] 6.2 UI: outreach panel on request detail; batch creation form with validation feedback per provider
-- [ ] 6.3 Events: `outreach_sent` per entry; tests for duplicate/opt-out/closed-request rejections
+- [x] 6.1 API: log outreach batch (shared batch number) with per-provider entries (contacted-by, channel `manual`, sent-at, notes); reject duplicate provider-request pairs; reject opted-out providers; reject after `booked`/`cancelled`
+- [x] 6.2 UI: outreach panel on request detail; batch creation form with validation feedback per provider
+- [x] 6.3 Events: `outreach_sent` per entry; tests for duplicate/opt-out/closed-request rejections
 
 ## 7. Effort tracking
 
