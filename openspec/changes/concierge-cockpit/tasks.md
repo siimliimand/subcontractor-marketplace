@@ -1,7 +1,7 @@
 ## 1. Project and Cloudflare setup
 
 - [x] 1.1 Initialise git repository and commit existing `docs/`, `openspec/`, `.opencode/`
-- [ ] 1.2 Scaffold Worker project: Hono + TypeScript + Vite React app served via Static Assets; `wrangler.jsonc` with `staging` and `production` environments
+- [x] 1.2 Scaffold Worker project: Hono + TypeScript + Vite React app served via Static Assets; `wrangler.jsonc` with `staging` and `production` environments
 - [ ] 1.3 Create staging and production D1 databases with EU location hint; wire bindings per environment
 - [ ] 1.4 Deploy hello-world to staging and production via `wrangler deploy`; verify rollback works once
 

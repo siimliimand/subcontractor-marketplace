@@ -27,7 +27,7 @@
         {
           "binding": "DB",
           "database_name": "cockpit-staging",
-          "database_id": "REPLACE_STAGING_D1_ID"
+          "database_id": "53e6e61f-ce10-4197-b091-b02662db95fe"
         }
       ]
     },
@@ -40,7 +40,7 @@
         {
           "binding": "DB",
           "database_name": "cockpit-production",
-          "database_id": "REPLACE_PRODUCTION_D1_ID"
+          "database_id": "d4f98dd6-fdc5-40bf-8bf7-c31bbb0ac7ab"
         }
       ]
     }
