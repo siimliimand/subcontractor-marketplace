@@ -1,0 +1,48 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "concierge-cockpit",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2024-11-01",
+  "assets": {
+    "not_found_handling": "single-page-application",
+    "binding": "ASSETS"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "cockpit-local",
+      "database_id": "local"
+    }
+  ],
+  "vars": {
+    "ACCESS_TEAM_DOMAIN": "https://example.cloudflareaccess.com"
+  },
+  "env": {
+    "staging": {
+      "name": "concierge-cockpit-staging",
+      "vars": {
+        "ACCESS_TEAM_DOMAIN": "https://staging.cloudflareaccess.com"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "cockpit-staging",
+          "database_id": "REPLACE_STAGING_D1_ID"
+        }
+      ]
+    },
+    "production": {
+      "name": "concierge-cockpit-production",
+      "vars": {
+        "ACCESS_TEAM_DOMAIN": "https://production.cloudflareaccess.com"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "cockpit-production",
+          "database_id": "REPLACE_PRODUCTION_D1_ID"
+        }
+      ]
+    }
+  }
+}
