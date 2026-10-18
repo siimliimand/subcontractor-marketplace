@@ -4,6 +4,7 @@
   "main": "src/worker/index.ts",
   "compatibility_date": "2024-11-01",
   "assets": {
+    "directory": "./dist/ui",
     "not_found_handling": "single-page-application",
     "binding": "ASSETS"
   },
