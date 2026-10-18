@@ -1,8 +1,10 @@
-# Subcontractor — Concierge Cockpit
+# Subcontractor Marketplace
 
-Internal staff tool for running the concierge pilot: provider administration, request
-lifecycle, outreach logging, manual-effort tracking and a funnel dashboard. Runs entirely
-on Cloudflare (Workers + D1 + Access + Static Assets).
+Internal concierge cockpit and future marketplace codebase for the Estonian construction
+subcontractor pilot. The cockpit (this repo's first app) is the staff tool for running
+the pilot: provider administration, request lifecycle, outreach logging, manual-effort
+tracking and a funnel dashboard. Runs entirely on Cloudflare (Workers + D1 + Access +
+Static Assets).
 
 ## Stack
 
