@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { get, post } from "../api";
 import { statusBadge } from "../types";
@@ -17,6 +17,7 @@ export default function RequestDetail() {
   const [providers, setProviders] = useState<{ company: { id: string; legalName: string } }[]>([]);
   const [effort, setEffort] = useState<{ totalMinutes: number; manualEvents: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const inFlight = useRef(false);
 
   async function load() {
     if (!id) return;
@@ -41,12 +42,15 @@ export default function RequestDetail() {
   }, []);
 
   async function action(path: string, body: unknown) {
-    if (!id) return;
+    if (!id || inFlight.current) return;
+    inFlight.current = true;
     try {
       await post(`/requests/${id}${path}`, body);
       await load();
     } catch (e) {
       setError(String(e));
+    } finally {
+      inFlight.current = false;
     }
   }
 

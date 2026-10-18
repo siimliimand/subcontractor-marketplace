@@ -9,6 +9,7 @@ export default function Providers() {
   const [providers, setProviders] = useState<ProviderRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [filters, setFilters] = useState({ trade: "", status: "", serviceArea: "", q: "" });
 
   async function load() {
@@ -29,6 +30,8 @@ export default function Providers() {
 
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (submitting) return;
+    setSubmitting(true);
     const data = Object.fromEntries(new FormData(e.currentTarget));
     try {
       await post("/providers", data);
@@ -36,6 +39,8 @@ export default function Providers() {
       await load();
     } catch (err) {
       setError(String(err));
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -82,7 +87,10 @@ export default function Providers() {
               <input name="contactPhone" className="mt-1 w-full border rounded p-1.5" />
             </label>
           </div>
-          <button className="bg-blue-600 text-white px-3 py-1.5 rounded text-sm hover:bg-blue-700">
+          <button
+            disabled={submitting}
+            className="bg-blue-600 text-white px-3 py-1.5 rounded text-sm hover:bg-blue-700 disabled:opacity-50"
+          >
             Create provider
           </button>
         </form>
