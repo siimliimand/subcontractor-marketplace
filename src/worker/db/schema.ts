@@ -26,10 +26,10 @@ export const companies = sqliteTable(
     createdAt: nowIso(),
     updatedAt: nowIso(),
   },
-  (t) => [
-    uniqueIndex("companies_registration_identifier_unique").on(t.registrationIdentifier),
-    index("companies_status_idx").on(t.status),
-  ],
+  (t) => ({
+    idx0: uniqueIndex("companies_registration_identifier_unique").on(t.registrationIdentifier),
+    idx1: index("companies_status_idx").on(t.status),
+  }),
 );
 
 export const services = sqliteTable(
@@ -50,7 +50,10 @@ export const services = sqliteTable(
     createdAt: nowIso(),
     updatedAt: nowIso(),
   },
-  (t) => [index("services_company_idx").on(t.companyId), index("services_trade_idx").on(t.trade)],
+  (t) => ({
+    idx0: index("services_company_idx").on(t.companyId),
+    idx1: index("services_trade_idx").on(t.trade),
+  }),
 );
 
 export const requests = sqliteTable(
@@ -76,7 +79,10 @@ export const requests = sqliteTable(
     createdAt: nowIso(),
     updatedAt: nowIso(),
   },
-  (t) => [index("requests_status_idx").on(t.status), index("requests_trade_idx").on(t.trade)],
+  (t) => ({
+    idx0: index("requests_status_idx").on(t.status),
+    idx1: index("requests_trade_idx").on(t.trade),
+  }),
 );
 
 export const responses = sqliteTable(
@@ -98,7 +104,9 @@ export const responses = sqliteTable(
       .notNull()
       .references(() => users.id),
   },
-  (t) => [index("responses_request_idx").on(t.requestId)],
+  (t) => ({
+    idx0: index("responses_request_idx").on(t.requestId),
+  }),
 );
 
 export const bookings = sqliteTable(
@@ -126,7 +134,9 @@ export const bookings = sqliteTable(
       .references(() => users.id),
     createdAt: nowIso(),
   },
-  (t) => [index("bookings_company_idx").on(t.companyId)],
+  (t) => ({
+    idx0: index("bookings_company_idx").on(t.companyId),
+  }),
 );
 
 export const outreachEntries = sqliteTable(
@@ -147,17 +157,17 @@ export const outreachEntries = sqliteTable(
     sentAt: nowIso(),
     notes: text(),
   },
-  (t) => [
-    uniqueIndex("outreach_request_company_unique").on(t.requestId, t.companyId),
-    index("outreach_batch_idx").on(t.batchNumber),
-  ],
+  (t) => ({
+    idx0: uniqueIndex("outreach_request_company_unique").on(t.requestId, t.companyId),
+    idx1: index("outreach_batch_idx").on(t.batchNumber),
+  }),
 );
 
 export const auditEvents = sqliteTable(
   "audit_events",
   {
     id: uuid().primaryKey(),
-    actorUserId: text().references(() => users.id),
+    actorUserId: text(),
     actorEmail: text(),
     occurredAt: nowIso(),
     entity: text().notNull(),
@@ -166,11 +176,11 @@ export const auditEvents = sqliteTable(
     payloadJson: text(),
     channel: text().notNull().default("manual"),
   },
-  (t) => [
-    index("audit_events_entity_idx").on(t.entity, t.entityId),
-    index("audit_events_action_idx").on(t.action),
-    index("audit_events_occurred_idx").on(t.occurredAt),
-  ],
+  (t) => ({
+    idx0: index("audit_events_entity_idx").on(t.entity, t.entityId),
+    idx1: index("audit_events_action_idx").on(t.action),
+    idx2: index("audit_events_occurred_idx").on(t.occurredAt),
+  }),
 );
 
 export const timeEntries = sqliteTable(
@@ -187,5 +197,7 @@ export const timeEntries = sqliteTable(
     note: text(),
     createdAt: nowIso(),
   },
-  (t) => [index("time_entries_request_idx").on(t.requestId)],
+  (t) => ({
+    idx0: index("time_entries_request_idx").on(t.requestId),
+  }),
 );

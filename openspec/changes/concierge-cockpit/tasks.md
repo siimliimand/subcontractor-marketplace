@@ -14,10 +14,10 @@
 
 ## 3. Data model and event infrastructure
 
-- [ ] 3.1 Define Drizzle schema: users, companies (providers), services, requests, responses, bookings, outreach_entries, audit_events, time_entries — UUIDv4 text PKs, UTC ISO-8601 timestamps
-- [ ] 3.2 Generate and apply initial migration to staging D1; verify tables and constraints
-- [ ] 3.3 Implement append-only event helper: fixed action-name enum, `channel` defaulting to `manual`, written in the same D1 batch as the mutation; unknown action names throw before any write
-- [ ] 3.4 Seed/config: configured trades list (six pilot trades), pricing-model enum (`hour`, `m2`, `project`)
+- [x] 3.1 Define Drizzle schema: users, companies (providers), services, requests, responses, bookings, outreach_entries, audit_events, time_entries — UUIDv4 text PKs, UTC ISO-8601 timestamps
+- [x] 3.2 Generate and apply initial migration to staging D1; verify tables and constraints
+- [x] 3.3 Implement append-only event helper: fixed action-name enum, `channel` defaulting to `manual`, written in the same D1 batch as the mutation; unknown action names throw before any write
+- [x] 3.4 Seed/config: configured trades list (six pilot trades), pricing-model enum (`hour`, `m2`, `project`)
 
 ## 4. Provider administration
 
