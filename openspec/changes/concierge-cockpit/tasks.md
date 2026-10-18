@@ -61,4 +61,4 @@
 - [ ] 9.1 Create production D1, apply migrations; configure production Access application + policy
 - [ ] 9.2 Deploy production; verify end-to-end: login, create provider, create request, outreach, response, booking, dashboard
 - [ ] 9.3 Secrets audit (`wrangler secret put` only; nothing committed), Access policy verified on staging before production switch
-- [ ] 9.4 Update `docs/implementation-plan.md` Phase 1 checklist and project README with run instructions
+- [x] 9.4 Update `docs/implementation-plan.md` Phase 1 checklist and project README with run instructions
