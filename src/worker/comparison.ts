@@ -2,12 +2,15 @@ import { and, eq, inArray } from "drizzle-orm";
 import type { DrizzleD1Database } from "drizzle-orm/d1";
 import {
   availabilityDeclarations,
+  bookings,
   companies,
+  companyVerifications,
   outreachEntries,
   responses,
   services,
 } from "./db/schema";
 import { freshness, summariseDeclarations } from "./availability";
+import { badgeShows, computeBadges, computeEstablished, type EstablishedBadge } from "./verification";
 
 /**
  * Response comparison (phase 2, P1): all responses to a request, grouped by
@@ -33,6 +36,13 @@ export type ComparisonEntry = {
     label: "confirmed" | "aging" | "stale" | "unconfirmed";
     confirmedWorkers: number;
   };
+  /** Phase 3: register-backed badges (display-gated, see verification.ts). */
+  verification: {
+    registeredActive: boolean;
+    tradeNotification: boolean;
+  };
+  /** Phase 4: platform-history "Established" badge. */
+  established: EstablishedBadge;
 };
 
 export type ComparisonGroup = {
@@ -46,6 +56,7 @@ export async function buildComparison(
   requestId: string,
   requiredTrades: { trade: string; isPrimary: boolean }[],
   requestStartDate?: string,
+  opts: { mtrEnabled?: boolean } = {},
 ): Promise<ComparisonGroup[]> {
   const responseRows = await db
     .select({ response: responses, provider: companies })
@@ -55,7 +66,7 @@ export async function buildComparison(
   if (responseRows.length === 0) return [];
 
   const companyIds = [...new Set(responseRows.map((r) => r.response.companyId))];
-  const [outreachRows, serviceRows, declarationRows] = await Promise.all([
+  const [outreachRows, serviceRows, declarationRows, verificationRows, bookingRows] = await Promise.all([
     db
       .select()
       .from(outreachEntries)
@@ -67,7 +78,20 @@ export async function buildComparison(
       .select()
       .from(availabilityDeclarations)
       .where(inArray(availabilityDeclarations.companyId, companyIds)),
+    db.select().from(companyVerifications).where(inArray(companyVerifications.companyId, companyIds)),
+    db.select().from(bookings).where(inArray(bookings.companyId, companyIds)),
   ]);
+  const mtrEnabled = opts.mtrEnabled ?? false;
+  const badgesByCompany = new Map<string, ReturnType<typeof computeBadges>>();
+  for (const companyId of companyIds) {
+    badgesByCompany.set(
+      companyId,
+      computeBadges(
+        verificationRows.filter((v) => v.companyId === companyId),
+        { mtrEnabled },
+      ),
+    );
+  }
 
   // trade attributed per company: matching-entry trade first, else a service trade
   const companyTrade = new Map<string, string>();
@@ -101,6 +125,8 @@ export async function buildComparison(
     if (summary.hasFreshDeclarations && freshest) {
       label = freshest as ComparisonEntry["availability"]["label"];
     }
+    const badges = badgesByCompany.get(response.companyId);
+    const assignedTrade = companyTrade.get(response.companyId);
     const entry: ComparisonEntry = {
       responseId: response.id,
       companyId: response.companyId,
@@ -111,6 +137,16 @@ export async function buildComparison(
       reason: response.reason,
       receivedAt: response.receivedAt,
       availability: { label, confirmedWorkers: summary.confirmedWorkers },
+      verification: {
+        registeredActive: badgeShows(badges?.registryActive),
+        tradeNotification: badgeShows(assignedTrade ? badges?.trades[assignedTrade] : null),
+      },
+      // Phase 4: platform-history badge in every PM-facing provider comparison.
+      established: computeEstablished(
+        bookingRows.filter(
+          (bk) => bk.companyId === response.companyId && bk.outcome === "completion_confirmed",
+        ).length,
+      ),
     };
     const trade = companyTrade.get(response.companyId);
     const group = trade && requiredSet.has(trade) ? byTrade.get(trade) : byTrade.get("ungrouped");

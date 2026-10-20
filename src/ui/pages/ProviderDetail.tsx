@@ -26,10 +26,27 @@ const toneClass: Record<string, string> = {
   unconfirmed: "bg-gray-200 text-gray-700",
 };
 
+type VerificationBadge = {
+  displayable: boolean;
+  status: string;
+  checkedAt: string;
+  sourceDataset: string;
+  sourceLicence: string;
+};
+
+type VerificationData = {
+  badges: {
+    registryActive: VerificationBadge | null;
+    trades: Record<string, VerificationBadge>;
+  };
+  mtrBadgesEnabled: boolean;
+};
+
 export default function ProviderDetail() {
   const { id } = useParams<{ id: string }>();
   const [provider, setProvider] = useState<Company | null>(null);
   const [availability, setAvailability] = useState<AvailabilityData | null>(null);
+  const [verifications, setVerifications] = useState<VerificationData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
 
@@ -38,6 +55,7 @@ export default function ProviderDetail() {
     try {
       setProvider(await get<Company>(`/providers/${id}`));
       setAvailability(await get<AvailabilityData>(`/providers/${id}/availability`));
+      setVerifications(await get<VerificationData>(`/providers/${id}/verifications`));
       setError(null);
     } catch (e) {
       setError(String(e));
@@ -284,6 +302,57 @@ export default function ProviderDetail() {
               Add service
             </button>
           </form>
+
+          <h2 className="font-semibold mb-2 mt-6">Verification</h2>
+          <div className="space-y-2 text-sm">
+            {(() => {
+              const b = verifications?.badges;
+              if (!b || (!b.registryActive && Object.keys(b.trades).length === 0)) {
+                return (
+                  <p className="bg-white p-3 rounded border text-gray-500">
+                    No register checks imported yet — run the offline import scripts.
+                  </p>
+                );
+              }
+              const items: { label: string; badge: VerificationBadge; note?: string }[] = [];
+              if (b.registryActive) {
+                items.push({
+                  label: "✓ Registered & active",
+                  badge: b.registryActive,
+                  note: b.registryActive.displayable
+                    ? undefined
+                    : "invalid or unknown registry status",
+                });
+              }
+              for (const [trade, badge] of Object.entries(b.trades)) {
+                items.push({
+                  label: `✓ Trade notification valid — ${trade}`,
+                  badge,
+                  note: !badge.displayable
+                    ? "hidden in views until TTJA licence confirmation (MTR_BADGES_ENABLED)"
+                    : badge.status !== "valid"
+                      ? "not currently valid"
+                      : undefined,
+                });
+              }
+              return items.map(({ label, badge, note }) => (
+                <div key={label} className="bg-white p-3 rounded border">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className={badge.status === "valid" ? "font-medium text-green-800" : "font-medium text-gray-500"}>
+                      {label}
+                    </span>
+                    <span className="text-xs text-gray-500">
+                      checked {badge.checkedAt.slice(0, 10)}
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-1">
+                    {badge.sourceDataset} · {badge.sourceLicence}
+                    {note ? ` · ${note}` : ""}
+                  </p>
+                </div>
+              ));
+            })()}
+          </div>
 
           <h2 className="font-semibold mb-2 mt-6">
             Availability{" "}

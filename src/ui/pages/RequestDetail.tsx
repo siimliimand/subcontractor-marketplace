@@ -105,8 +105,7 @@ export default function RequestDetail() {
       </p>
 
       {data.comparison.length > 0 && (
-        <Card title="Response comparison (by trade)">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+        <Card title="Response comparison (by trade)">          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
             {data.comparison.map((group) => (
               <div key={group.trade} className="border rounded p-2">
                 <p className="font-medium mb-1">
@@ -120,6 +119,12 @@ export default function RequestDetail() {
                     {group.entries.map((e) => (
                       <li key={e.responseId} className="flex justify-between gap-2">
                         <span>
+                          {e.verification?.registeredActive && (
+                            <span className="text-green-700 mr-1" title="Registered & active (Äriregister)">✓ Registered</span>
+                          )}
+                          {e.verification?.tradeNotification && (
+                            <span className="text-green-700 mr-1" title="Trade notification valid (MTR/Tarvik)">✓ Licensed</span>
+                          )}
                           {e.legalName} — {e.type}
                           {e.workersCount ? ` · ${e.workersCount} workers from ${e.availableFrom ?? "?"}` : ""}
                         </span>
@@ -149,6 +154,8 @@ export default function RequestDetail() {
           </div>
         </Card>
       )}
+
+      {data.outreach.length > 0 && <OutreachBatchesPanel outreach={data.outreach} />}
 
       {error && <div className="mb-4 text-sm text-red-600 bg-red-50 p-2 rounded">{error}</div>}
 
@@ -850,6 +857,12 @@ function BookingFlowPanel({
 
   return (
     <Card title="Booking (request → confirm)">
+      {/* details/03: the platform cannot know about commitments made outside
+          the system — always visible where bookings are made. */}
+      <p className="mb-2 text-xs text-gray-500">
+        Note: the platform cannot see commitments made outside this system. A provider's
+        availability here is not a guarantee — off-platform bookings may exist.
+      </p>
       {disabled ? (
         <p className="text-sm text-gray-500">Booking not available in this status.</p>
       ) : (
@@ -893,7 +906,10 @@ function BookingFlowPanel({
             <div key={br.id} className="flex items-center gap-2 text-sm border rounded p-2">
               <span className="flex-1">
                 {provider?.legalName ?? br.companyId.slice(0, 8)} · {br.trade} · {br.startDate} →{" "}
-                {br.endDate} · {br.workersCount} workers
+                {br.endDate} · {br.workersCount} workers ·{" "}
+                <span className="text-amber-600 font-medium">
+                  Tentative — awaiting confirmation
+                </span>
               </span>
               <button
                 disabled={busy}
@@ -912,6 +928,157 @@ function BookingFlowPanel({
               </button>
             </div>
           ))}
+
+          {(() => {
+            const live = data.bookings.find(({ booking }) => !booking.outcome);
+            if (!live) return null;
+            const { booking, provider } = live;
+            const reconfirm = data.reconfirmations?.[booking.id];
+            const proposals = (data.reschedules ?? []).filter(
+              (r) => r.bookingId === booking.id,
+            );
+            const openProposal = proposals.find((r) => r.state === "proposed");
+            return (
+              <div className="border rounded p-2 space-y-2 bg-green-50">
+                <div className="text-sm">
+                  <span className="font-medium text-green-700">Confirmed booking</span> ·{" "}
+                  {provider?.legalName ?? booking.companyId.slice(0, 8)} · {booking.startDate} →{" "}
+                  {booking.endDate} · {booking.workersCount} workers
+                  {reconfirm?.required && (
+                    <span className="ml-2 text-amber-600 font-medium">
+                      ⚠ Availability {reconfirm.worstState} — reconfirmation required
+                    </span>
+                  )}
+                </div>
+
+                {reconfirm?.required && (
+                  <button
+                    disabled={busy}
+                    onClick={async () => {
+                      setBusy(true);
+                      try {
+                        await fetch(`/api/providers/${booking.companyId}/availability/reconfirm`, {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ bookingId: booking.id }),
+                        });
+                        await onChanged();
+                      } finally {
+                        setBusy(false);
+                      }
+                    }}
+                    className="bg-amber-500 text-white px-3 py-1 rounded text-sm disabled:opacity-50"
+                  >
+                    Reconfirm availability
+                  </button>
+                )}
+
+                {!openProposal ? (
+                  <form
+                    onSubmit={async (e) => {
+                      e.preventDefault();
+                      if (busy) return;
+                      setBusy(true);
+                      try {
+                        const d = Object.fromEntries(
+                          new FormData(e.currentTarget),
+                        ) as Record<string, string>;
+                        d.workersCount = String(Number(d.workersCount));
+                        const { ok } = await post("/bookings/reschedule", d);
+                        if (ok) await onChanged();
+                      } finally {
+                        setBusy(false);
+                      }
+                    }}
+                    className="flex gap-2 items-center flex-wrap text-sm border-t pt-2"
+                  >
+                    <span className="text-gray-600">Reschedule:</span>
+                    <input name="startDate" type="date" required className="border rounded p-1.5 text-sm" />
+                    <input name="endDate" type="date" required className="border rounded p-1.5 text-sm" />
+                    <input
+                      name="workersCount"
+                      type="number"
+                      min="1"
+                      placeholder="Workers"
+                      required
+                      className="border rounded p-1.5 text-sm w-24"
+                    />
+                    <input name="reason" placeholder="Reason" className="border rounded p-1.5 text-sm w-40" />
+                    <button className="bg-blue-600 text-white px-3 py-1 rounded text-sm" disabled={busy}>
+                      Propose
+                    </button>
+                  </form>
+                ) : (
+                  <div className="text-sm border-t pt-2 flex items-center gap-2 flex-wrap">
+                    <span>
+                      Reschedule proposed: {openProposal.startDate} → {openProposal.endDate} ·{" "}
+                      {openProposal.workersCount} workers
+                      {openProposal.reason ? ` · ${openProposal.reason}` : ""}
+                    </span>
+                    <button
+                      disabled={busy}
+                      onClick={async () => {
+                        setBusy(true);
+                        try {
+                          const { ok } = await post(
+                            `/bookings/reschedule/${openProposal.id}/confirm`,
+                            {},
+                          );
+                          if (ok) await onChanged();
+                        } finally {
+                          setBusy(false);
+                        }
+                      }}
+                      className="bg-green-600 text-white px-3 py-1 rounded text-sm disabled:opacity-50"
+                    >
+                      Confirm reschedule
+                    </button>
+                    <button
+                      disabled={busy}
+                      onClick={async () => {
+                        setBusy(true);
+                        try {
+                          await post(`/bookings/reschedule/${openProposal.id}/reject`, {});
+                          await onChanged();
+                        } finally {
+                          setBusy(false);
+                        }
+                      }}
+                      className="text-red-600 hover:underline text-sm"
+                    >
+                      Reject
+                    </button>
+                  </div>
+                )}
+
+                <form
+                  onSubmit={async (e) => {
+                    e.preventDefault();
+                    if (busy) return;
+                    setBusy(true);
+                    try {
+                      const d = Object.fromEntries(new FormData(e.currentTarget)) as Record<string, string>;
+                      const { ok } = await post("/bookings/cancel", d);
+                      if (ok) await onChanged();
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                  className="flex gap-2 items-center flex-wrap text-sm border-t pt-2"
+                >
+                  <span className="text-gray-600">Cancel booking:</span>
+                  <select name="cancelledBy" required className="border rounded p-1.5 text-sm">
+                    <option value="customer">by customer</option>
+                    <option value="provider">by provider</option>
+                  </select>
+                  <input name="reason" placeholder="Reason (required)" required className="border rounded p-1.5 text-sm w-48" />
+                  <button className="bg-red-600 text-white px-3 py-1 rounded text-sm" disabled={busy}>
+                    Cancel booking
+                  </button>
+                </form>
+              </div>
+            );
+          })()}
 
           <form
             onSubmit={(e) => submit(e, "/holds", "workersCount")}
@@ -975,6 +1142,116 @@ function BookingFlowPanel({
         </div>
       )}
       {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+    </Card>
+  );
+}
+
+/**
+ * Phase 3: post-hoc explainability — the outreach panel re-opens the factor
+ * breakdown stored on matching-channel entries at match time (per-factor
+ * contribution, inputs, missing flags and the weights then in force), without
+ * recomputation. Legacy entries that predate weight snapshots render with
+ * defaults noted.
+ */
+function OutreachBatchesPanel({
+  outreach,
+}: {
+  outreach: RequestDetailData["outreach"];
+}) {
+  const [openId, setOpenId] = useState<string | null>(null);
+  const matching = outreach.filter(({ entry }) => entry.channel === "matching");
+  if (matching.length === 0) return null;
+
+  return (
+    <Card title="Outreach batches (matching)">
+      <div className="space-y-2 text-sm">
+        {matching.map(({ entry, provider }) => {
+          let parsed: {
+            factors?: Record<
+              string,
+              { value: number; weighted: number; missing: boolean; inputs: Record<string, unknown> }
+            >;
+            weights?: Record<string, number>;
+          } | null = null;
+          let legacy = false;
+          try {
+            const raw = entry.matchFactorsJson ? JSON.parse(entry.matchFactorsJson) : null;
+            if (raw && typeof raw === "object" && raw.factors) {
+              parsed = raw;
+            } else if (raw && typeof raw === "object") {
+              // Legacy (phase 2): bare factor breakdown without a weights snapshot.
+              parsed = { factors: raw as Record<string, never> };
+              legacy = true;
+            }
+          } catch {
+            parsed = null;
+          }
+          const isOpen = openId === entry.id;
+          return (
+            <div key={entry.id} className="border rounded p-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-medium">
+                  {provider?.legalName ?? entry.companyId.slice(0, 8)}
+                </span>
+                <span className="text-xs text-gray-500">
+                  {entry.trade ?? ""} · batch {entry.batchNumber} · score{" "}
+                  {entry.matchScore != null ? entry.matchScore.toFixed(3) : "?"}
+                </span>
+                {parsed?.factors && (
+                  <button
+                    type="button"
+                    className="text-blue-600 hover:underline text-xs"
+                    onClick={() => setOpenId(isOpen ? null : entry.id)}
+                  >
+                    {isOpen ? "Hide ranking rationale" : "Why this provider ranked here"}
+                  </button>
+                )}
+              </div>
+              {isOpen && parsed?.factors && (
+                <div className="mt-2 border-t pt-2 space-y-1">
+                  {legacy && (
+                    <p className="text-xs text-gray-400">
+                      Stored before weight snapshots — defaults assumed.
+                    </p>
+                  )}
+                  {parsed.weights && (
+                    <p className="text-xs text-gray-500">
+                      Weights at match time:{" "}
+                      {Object.entries(parsed.weights)
+                        .map(([k, v]) => `${k} ${v.toFixed(2)}`)
+                        .join(" · ")}
+                    </p>
+                  )}
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-left text-gray-500">
+                        <th className="pr-2">Factor</th>
+                        <th className="pr-2">Value</th>
+                        <th className="pr-2">Weighted</th>
+                        <th>Inputs / missing</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Object.entries(parsed.factors).map(([name, f]) => (
+                        <tr key={name} className="border-t">
+                          <td className="pr-2 py-0.5">{name}</td>
+                          <td className="pr-2">{f.missing ? "—" : f.value.toFixed(2)}</td>
+                          <td className="pr-2">{f.weighted.toFixed(3)}</td>
+                          <td className={f.missing ? "text-amber-600" : "text-gray-500"}>
+                            {f.missing
+                              ? `no data — contributes 0 (${JSON.stringify(f.inputs)})`
+                              : JSON.stringify(f.inputs)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </Card>
   );
 }

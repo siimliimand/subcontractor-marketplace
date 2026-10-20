@@ -7,6 +7,7 @@ import ProviderDetail from "./pages/ProviderDetail";
 import Requests from "./pages/Requests";
 import RequestDetail from "./pages/RequestDetail";
 import Dashboard from "./pages/Dashboard";
+import Suppressions from "./pages/Suppressions";
 
 function Layout({ children }: { children: React.ReactNode }) {
   return (
@@ -37,6 +38,14 @@ function Layout({ children }: { children: React.ReactNode }) {
         >
           Dashboard
         </NavLink>
+        <NavLink
+          to="/suppressions"
+          className={({ isActive }) =>
+            `text-sm ${isActive ? "text-blue-600 font-semibold" : "text-gray-600 hover:text-gray-900"}`
+          }
+        >
+          Suppressions
+        </NavLink>
       </nav>
       <main className="max-w-6xl mx-auto p-6">{children}</main>
     </div>
@@ -54,6 +63,7 @@ function App() {
           <Route path="/requests" element={<Requests />} />
           <Route path="/requests/:id" element={<RequestDetail />} />
           <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/suppressions" element={<Suppressions />} />
         </Routes>
       </Layout>
     </BrowserRouter>

@@ -3,7 +3,13 @@
  * Every factor is computed only from data that exists; a factor without
  * supporting data contributes zero and is reported as missing. Weights are
  * hypotheses to be tuned in Phase 3 from real outcomes.
+ *
+ * Phase 4: reliability and review quality honour the details/05 minimum
+ * samples — below them the factor is missing (neutral), because history
+ * absence is never scored as a negative signal.
  */
+import { MIN_SAMPLE_COMPLETION, MIN_SAMPLE_REVIEWS } from "../reliability";
+
 export const MATCH_WEIGHTS = {
   confirmedCapacity: 0.25,
   specialisationDepth: 0.2,
@@ -15,6 +21,15 @@ export const MATCH_WEIGHTS = {
 } as const;
 
 export type MatchFactorKey = keyof typeof MATCH_WEIGHTS;
+
+/** Phase 3: runtime-tunable weights (effective = latest match_weights row per factor). */
+export type EffectiveWeights = Record<MatchFactorKey, number>;
+
+export function isMatchFactorKey(value: string): value is MatchFactorKey {
+  return Object.prototype.hasOwnProperty.call(MATCH_WEIGHTS, value);
+}
+
+export const DEFAULT_WEIGHTS: EffectiveWeights = { ...MATCH_WEIGHTS };
 
 export type FactorResult = {
   /** Normalised factor value in [0, 1]. */
@@ -48,6 +63,9 @@ export type FactorInputs = {
   serviceAreas: string[];
   /** Request budget (free text, may be unparseable). */
   requestBudget: string | null;
+  /** Phase 4: undisputed review ratings for the provider (optional for
+   * backwards compatibility with pure-function call sites). */
+  reviews?: { rating: number }[];
 };
 
 export type FactorBreakdown = Record<MatchFactorKey, FactorResult>;
@@ -56,8 +74,8 @@ function factor(
   key: MatchFactorKey,
   value: number | null,
   inputs: Record<string, unknown>,
+  weight: number = MATCH_WEIGHTS[key],
 ): FactorResult {
-  const weight = MATCH_WEIGHTS[key];
   if (value === null || Number.isNaN(value)) {
     return { value: 0, weighted: 0, missing: true, inputs };
   }
@@ -66,21 +84,21 @@ function factor(
 }
 
 /** Capacity relative to the requested crew; data missing when no fresh declarations exist. */
-function confirmedCapacity(i: FactorInputs): FactorResult {
+function confirmedCapacity(i: FactorInputs, w: EffectiveWeights): FactorResult {
   if (!i.hasFreshDeclarations) {
-    return factor("confirmedCapacity", null, { confirmedWorkers: 0, crewSize: i.crewSize, note: "no fresh availability declaration" });
+    return factor("confirmedCapacity", null, { confirmedWorkers: 0, crewSize: i.crewSize, note: "no fresh availability declaration" }, w.confirmedCapacity);
   }
   const ratio = i.crewSize > 0 ? i.confirmedWorkers / i.crewSize : i.confirmedWorkers > 0 ? 1 : 0;
   return factor("confirmedCapacity", ratio, {
     confirmedWorkers: i.confirmedWorkers,
     crewSize: i.crewSize,
-  });
+  }, w.confirmedCapacity);
 }
 
 /** Specialisation depth: skills listed and the trade marked primary. */
-function specialisationDepth(i: FactorInputs): FactorResult {
+function specialisationDepth(i: FactorInputs, w: EffectiveWeights): FactorResult {
   if (i.tradeServices.length === 0) {
-    return factor("specialisationDepth", null, { services: 0 });
+    return factor("specialisationDepth", null, { services: 0 }, w.specialisationDepth);
   }
   const withSkills = i.tradeServices.filter((s) => s.skills && s.skills.trim()).length;
   const primary = i.tradeServices.some((s) => s.isPrimaryTrade);
@@ -88,13 +106,13 @@ function specialisationDepth(i: FactorInputs): FactorResult {
     .map((s) => (s.skills ?? "").split(",").map((x) => x.trim()).filter(Boolean))
     .flat();
   const value = Math.min(1, (withSkills > 0 ? 0.5 : 0) + (primary ? 0.3 : 0) + Math.min(0.2, skillList.length * 0.05));
-  return factor("specialisationDepth", value, { withSkills, primaryTrade: primary, skills: skillList });
+  return factor("specialisationDepth", value, { withSkills, primaryTrade: primary, skills: skillList }, w.specialisationDepth);
 }
 
 /** Response history: response rate (70%) + speed (30%), needs past outreach. */
-function responseHistory(i: FactorInputs): FactorResult {
+function responseHistory(i: FactorInputs, w: EffectiveWeights): FactorResult {
   if (i.pastOutreach.length === 0) {
-    return factor("responseHistory", null, { outreachCount: 0, note: "no past outreach" });
+    return factor("responseHistory", null, { outreachCount: 0, note: "no past outreach" }, w.responseHistory);
   }
   const responded = i.pastOutreach.filter((o) => o.responded).length;
   const rate = responded / i.pastOutreach.length;
@@ -110,32 +128,39 @@ function responseHistory(i: FactorInputs): FactorResult {
     outreachCount: i.pastOutreach.length,
     responseRate: rate,
     medianResponseHours: hours.length ? hours.sort((a, b) => a - b)[Math.floor(hours.length / 2)] : null,
-  });
+  }, w.responseHistory);
 }
 
-/** Reliability: completions minus failures and provider-attributed cancellations. */
-function reliability(i: FactorInputs): FactorResult {
-  if (i.pastBookings.length === 0) {
-    return factor("reliability", null, { bookings: 0, note: "no past bookings" });
+/**
+ * Reliability: completions minus failures and provider-attributed
+ * cancellations — displayed (and scored) only above the details/05 minimum
+ * sample of 3 finished bookings; below it the factor is neutral.
+ */
+function reliability(i: FactorInputs, w: EffectiveWeights): FactorResult {
+  const denominator = i.pastBookings.length + i.providerCancellations;
+  if (denominator < MIN_SAMPLE_COMPLETION) {
+    return factor("reliability", null, {
+      bookings: i.pastBookings.length,
+      providerCancellations: i.providerCancellations,
+      note: "insufficient history: minimum sample not met (neutral)",
+    }, w.reliability);
   }
   const completed = i.pastBookings.filter((b) => b.outcome === "completion_confirmed").length;
   const failed = i.pastBookings.filter((b) => b.outcome === "accepted_but_not_delivered").length;
-  const value = Math.max(
-    0,
-    Math.min(1, (completed - failed - i.providerCancellations) / i.pastBookings.length),
-  );
+  const value = Math.max(0, Math.min(1, (completed - failed - i.providerCancellations) / denominator));
   return factor("reliability", value, {
     bookings: i.pastBookings.length,
     completed,
     failed,
     providerCancellations: i.providerCancellations,
-  });
+    minSample: MIN_SAMPLE_COMPLETION,
+  }, w.reliability);
 }
 
 /** Proximity: normalised substring match of request location in a service area (heuristic). */
-function proximity(i: FactorInputs): FactorResult {
+function proximity(i: FactorInputs, w: EffectiveWeights): FactorResult {
   if (i.serviceAreas.length === 0) {
-    return factor("proximity", null, { serviceAreas: [] });
+    return factor("proximity", null, { serviceAreas: [] }, w.proximity);
   }
   const loc = i.requestLocation.trim().toLowerCase();
   const areas = i.serviceAreas.map((a) => a.trim().toLowerCase());
@@ -146,16 +171,33 @@ function proximity(i: FactorInputs): FactorResult {
     serviceAreas: i.serviceAreas,
     requestLocation: i.requestLocation,
     heuristic: true,
-  });
+  }, w.proximity);
 }
 
-/** No reviews exist in Phase 2 — always missing, contributes zero for everyone. */
-function reviewQuality(): FactorResult {
-  return factor("reviewQuality", null, { note: "no review data in phase 2" });
+/**
+ * Reviews tied to completed bookings (phase 4) — average rating normalised
+ * from the 1–5 scale; scored only above the details/05 minimum of 3
+ * undisputed reviews.
+ */
+function reviewQuality(i: FactorInputs, w: EffectiveWeights): FactorResult {
+  const ratings = (i.reviews ?? []).map((r) => r.rating);
+  if (ratings.length < MIN_SAMPLE_REVIEWS) {
+    return factor("reviewQuality", null, {
+      reviews: ratings.length,
+      note: ratings.length === 0 ? "no review data" : "insufficient history: minimum sample not met (neutral)",
+    }, w.reviewQuality);
+  }
+  const avg = ratings.reduce((a, r) => a + r, 0) / ratings.length;
+  const value = (avg - 1) / 4; // 1→0, 5→1
+  return factor("reviewQuality", value, {
+    reviews: ratings.length,
+    averageRating: Math.round(avg * 100) / 100,
+    minSample: MIN_SAMPLE_REVIEWS,
+  }, w.reviewQuality);
 }
 
 /** Price fit: parse numbers from budget and pricing approach ranges; both needed. */
-function priceFit(i: FactorInputs): FactorResult {
+function priceFit(i: FactorInputs, w: EffectiveWeights): FactorResult {
   const budgetNum = i.requestBudget?.match(/\d+(?:[.,]\d+)?/)?.[0];
   const priceNums = i.tradeServices
     .flatMap((s) => [...(s.pricingApproach?.matchAll(/\d+(?:[.,]\d+)?/g) ?? [])].map((m) => m[0]))
@@ -164,7 +206,7 @@ function priceFit(i: FactorInputs): FactorResult {
     return factor("priceFit", null, {
       budget: i.requestBudget,
       note: "budget or price data missing/unparseable",
-    });
+    }, w.priceFit);
   }
   const budget = parseFloat(budgetNum.replace(",", "."));
   const prices = priceNums.map((p) => parseFloat(p.replace(",", ".")));
@@ -180,15 +222,15 @@ function priceFit(i: FactorInputs): FactorResult {
   return factor("priceFit", value, { budget, priceRange: [min, max] });
 }
 
-export function computeFactors(i: FactorInputs): FactorBreakdown {
+export function computeFactors(i: FactorInputs, w: EffectiveWeights = DEFAULT_WEIGHTS): FactorBreakdown {
   return {
-    confirmedCapacity: confirmedCapacity(i),
-    specialisationDepth: specialisationDepth(i),
-    responseHistory: responseHistory(i),
-    reliability: reliability(i),
-    proximity: proximity(i),
-    reviewQuality: reviewQuality(),
-    priceFit: priceFit(i),
+    confirmedCapacity: confirmedCapacity(i, w),
+    specialisationDepth: specialisationDepth(i, w),
+    responseHistory: responseHistory(i, w),
+    reliability: reliability(i, w),
+    proximity: proximity(i, w),
+    reviewQuality: reviewQuality(i, w),
+    priceFit: priceFit(i, w),
   };
 }
 

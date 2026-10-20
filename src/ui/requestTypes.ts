@@ -29,6 +29,10 @@ export type ComparisonEntry = {
   reason: string | null;
   receivedAt: string | null;
   availability: { label: string; confirmedWorkers: number };
+  verification?: {
+    registeredActive: boolean;
+    tradeNotification: boolean;
+  };
 };
 
 export type ComparisonGroup = {
@@ -48,6 +52,8 @@ export type RequestDetailData = {
   outreach: { entry: OutreachRow; provider: Company | null }[];
   timeEntries: TimeEntryRow[];
   events: AuditEventRow[];
+  reschedules?: BookingRescheduleRow[];
+  reconfirmations?: Record<string, { required: boolean; worstState: string | null }>;
 };
 
 export type BookingRequestRow = {
@@ -99,6 +105,22 @@ export type BookingRow = {
   outcome: string | null;
   outcomeReason: string | null;
   outcomeAt: string | null;
+  cancelledBy?: string | null;
+  cancelReason?: string | null;
+  cancelledAt?: string | null;
+  createdAt: string;
+};
+
+export type BookingRescheduleRow = {
+  id: string;
+  bookingId: string;
+  startDate: string;
+  endDate: string;
+  workersCount: number;
+  state: string;
+  reason: string | null;
+  proposedBy: string;
+  resolvedBy: string | null;
   createdAt: string;
 };
 
@@ -110,6 +132,8 @@ export type OutreachRow = Service & {
   contactedBy: string;
   emailStatus?: "sent" | "delivered" | "bounced" | "opened" | "skipped" | null;
   emailSkippedReason?: string | null;
+  matchScore?: number | null;
+  matchFactorsJson?: string | null;
 };
 
 export type TimeEntryRow = {

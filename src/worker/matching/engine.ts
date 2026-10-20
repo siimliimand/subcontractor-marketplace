@@ -1,11 +1,13 @@
-import { and, eq, inArray, ne } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne } from "drizzle-orm";
 import type { DrizzleD1Database } from "drizzle-orm/d1";
 import {
   availabilityDeclarations,
+  bookingReviews,
   bookings,
   companies,
   outreachEntries,
   responses,
+  serviceRegions,
   services,
   type requests as requestsTable,
 } from "../db/schema";
@@ -16,6 +18,7 @@ import {
   type FactorBreakdown,
   type FactorInputs,
 } from "./weights";
+import { getEffectiveWeights } from "./runtimeWeights";
 import type { Trade } from "../config";
 
 export const INITIAL_BATCH_SIZE = 5;
@@ -43,6 +46,10 @@ export type MatchRunResult = {
   trade: Trade;
   candidates: Candidate[];
   excluded: ExcludedCandidate[];
+  /** Effective weights used for this run (snapshot for explainability). */
+  weights: Record<string, number>;
+  /** Phase 4: the region filter that applied, null when unrestricted. */
+  regionFilter: string | null;
 };
 
 /**
@@ -56,6 +63,21 @@ export async function selectCandidates(
   request: RequestRow,
   trade: Trade,
 ): Promise<MatchRunResult> {
+  // Phase 3: effective (runtime-tunable) weights load once per run and are
+  // reported with the results so the batch is explainable as-of match time.
+  const { weights } = await getEffectiveWeights(db);
+  // Phase 4: region coverage map — a request with a declared region restricts
+  // candidates to providers that cover it or declared no coverage at all.
+  const region = (request as { region?: string | null }).region ?? null;
+  let covering = new Set<string>();
+  let hasAnyCoverage = new Set<string>();
+  if (region) {
+    const allCoverage = await db.select().from(serviceRegions);
+    for (const r of allCoverage) {
+      hasAnyCoverage.add(r.companyId);
+      if (r.regionSlug === region) covering.add(r.companyId);
+    }
+  }
   const rows = await db
     .select({ company: companies, service: services })
     .from(services)
@@ -80,6 +102,16 @@ export async function selectCandidates(
       excluded.push({ companyId: company.id, legalName: company.legalName, reason: "location_not_in_service_area" });
       continue;
     }
+    // Phase 4: region filter — declared coverage wins; coverage-optional
+    // providers stay eligible everywhere.
+    if (region && !covering.has(company.id) && hasAnyCoverage.has(company.id)) {
+      excluded.push({
+        companyId: company.id,
+        legalName: company.legalName,
+        reason: `region_not_covered: ${region}`,
+      });
+      continue;
+    }
     seen.add(company.id);
 
     const declarations = await db
@@ -98,10 +130,15 @@ export async function selectCandidates(
       now,
     });
 
-    const [pastOutreach, companyResponses, companyBookings] = await Promise.all([
+    const [pastOutreach, companyResponses, companyBookings, companyReviews] = await Promise.all([
       db.select().from(outreachEntries).where(eq(outreachEntries.companyId, company.id)),
       db.select().from(responses).where(eq(responses.companyId, company.id)),
       db.select().from(bookings).where(eq(bookings.companyId, company.id)),
+      // Phase 4: undisputed reviews only — disputes hide from ranking too.
+      db
+        .select()
+        .from(bookingReviews)
+        .where(and(eq(bookingReviews.companyId, company.id), isNull(bookingReviews.disputedAt))),
     ]);
     const responseByEntry = new Map<string, { hours: number }>();
     for (const entry of pastOutreach) {
@@ -119,8 +156,10 @@ export async function selectCandidates(
       const hit = responseByEntry.get(entry.id);
       return { responded: !!hit, responseHours: hit?.hours ?? null };
     });
+    // Phase 3: only provider-attributed cancellations count against the
+    // provider — a customer cancelling is not a reliability failure.
     const providerCancellations = companyBookings.filter(
-      (b) => b.outcome === "cancelled",
+      (b) => b.outcome === "cancelled" && b.cancelledBy === "provider",
     ).length;
 
     const inputs: FactorInputs = {
@@ -139,11 +178,12 @@ export async function selectCandidates(
         .filter((b) => b.outcome === "completion_confirmed" || b.outcome === "accepted_but_not_delivered")
         .map((b) => ({ outcome: b.outcome })),
       providerCancellations,
+      reviews: companyReviews.map((r) => ({ rating: r.rating })),
       requestLocation: request.location,
       serviceAreas: [service.serviceArea],
       requestBudget: request.budget,
     };
-    const factors = computeFactors(inputs);
+    const factors = computeFactors(inputs, weights);
     const firstSkill = (service.skills ?? "")
       .split(",")
       .map((s) => s.trim())
@@ -159,7 +199,7 @@ export async function selectCandidates(
   }
 
   candidates.sort((a, b) => b.score - a.score || a.legalName.localeCompare(b.legalName));
-  return { trade, candidates, excluded };
+  return { trade, candidates, excluded, weights, regionFilter: region };
 }
 
 /**

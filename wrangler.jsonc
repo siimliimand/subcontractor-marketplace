@@ -2,6 +2,11 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "concierge-cockpit",
   "main": "src/worker/index.ts",
+  // Phase 3 hourly cron: timeout-triggered outreach widening + retention
+  // purge (logic in src/worker/cron/*, tests invoke the modules directly).
+  "triggers": {
+    "crons": ["0 * * * *"]
+  },
   "compatibility_date": "2024-11-01",
   "compatibility_flags": ["nodejs_compat"],
   "observability": {
@@ -49,7 +54,15 @@
       "vars": {
         "EMAIL_FROM": "Subcrew Staging <info@subcontractor.ww0.dev>",
         "EMAIL_REPLY_TO": "siim.liimand@gmail.com",
-        "EMAIL_DAILY_LIMIT": "50"
+        "EMAIL_DAILY_LIMIT": "50",
+        // Phase 4: expansion tracks — demand-gated flags start off; calendar
+        // fetch is on (feeds only exist once staff register them).
+        "CALENDAR_FETCH_ENABLED": "true",
+        "CALENDAR_STALE_DAYS": "3",
+        "CALENDAR_PURGE_DAYS": "14",
+        "MAX_FEEDS_PER_COMPANY": "3",
+        "MONETIZATION_PILOT_ENABLED": "false",
+        "PLANNER_AI_ENABLED": "false"
       },
       "send_email": [{ "name": "SEND_EMAIL" }],
       "ai": { "binding": "AI" },
@@ -69,7 +82,13 @@
       "vars": {
         "EMAIL_FROM": "Subcrew <info@subcontractor.ww0.dev>",
         "EMAIL_REPLY_TO": "siim.liimand@gmail.com",
-        "EMAIL_DAILY_LIMIT": "50"
+        "EMAIL_DAILY_LIMIT": "50",
+        "CALENDAR_FETCH_ENABLED": "true",
+        "CALENDAR_STALE_DAYS": "3",
+        "CALENDAR_PURGE_DAYS": "14",
+        "MAX_FEEDS_PER_COMPANY": "3",
+        "MONETIZATION_PILOT_ENABLED": "false",
+        "PLANNER_AI_ENABLED": "false"
       },
       "send_email": [{ "name": "SEND_EMAIL" }],
       "ai": { "binding": "AI" },

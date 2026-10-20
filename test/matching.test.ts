@@ -144,9 +144,14 @@ describe("matching v1", () => {
       expect(entry.channel).toBe("matching");
       expect(entry.trade).toBe("electrical");
       expect(entry.matchScore).not.toBeNull();
-      const factors = JSON.parse(entry.matchFactorsJson!) as Record<string, { missing: boolean }>;
-      expect(Object.keys(factors)).toContain("confirmedCapacity");
-      expect(factors.reviewQuality!.missing).toBe(true); // no reviews in phase 2
+      // Phase 3: the stored breakdown is wrapped with the weights snapshot.
+      const stored = JSON.parse(entry.matchFactorsJson!) as {
+        factors: Record<string, { missing: boolean }>;
+        weights: Record<string, number>;
+      };
+      expect(Object.keys(stored.factors)).toContain("confirmedCapacity");
+      expect(stored.factors.reviewQuality!.missing).toBe(true); // no reviews in phase 2
+      expect(stored.weights.confirmedCapacity).toBe(0.25);
     }
 
     // matched audit event written, request now in_outreach

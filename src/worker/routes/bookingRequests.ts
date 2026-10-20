@@ -4,6 +4,7 @@ import type { BatchItem } from "drizzle-orm/batch";
 import { drizzle } from "drizzle-orm/d1";
 import {
   bookingRequests,
+  bookingReschedules,
   bookings,
   holds,
   requests,
@@ -12,7 +13,9 @@ import {
 } from "../db/schema";
 import type { AppEnv } from "../app";
 import { auditEventStatement } from "../events";
-import { isTrade } from "../config";
+import { isKnownCatalogTrade } from "../catalog";
+import { findCalendarConflict, calendarConflictResponse } from "../calendar/busy";
+import { monetizationEnabled, gateBookingAction } from "../monetization";
 import {
   expireDueHolds,
   holdsEnabled,
@@ -21,6 +24,43 @@ import {
 } from "../holds";
 
 export const bookingRouter = new Hono<AppEnv>();
+
+// Phase 4 monetization gate (details/09: booking interface is the paid
+// part). Only when the pilot flag is on: booking-flow mutations on requests
+// whose partner has no active agreement are refused with an upgrade prompt,
+// and every gate hit is counted as funnel evidence. Flag off → no-op.
+bookingRouter.use("/requests/:id/*", async (c, next) => {
+  if (c.req.method !== "POST") return next();
+  if (!monetizationEnabled(c.env)) return next();
+  const db = drizzle(c.env.DB);
+  const request = (
+    await db.select().from(requests).where(eq(requests.id, c.req.param("id"))).limit(1)
+  )[0];
+  if (!request) return next(); // the route itself 404s
+  const gate = await gateBookingAction(db, request, new Date());
+  if (!gate.gated) return next();
+
+  await db.batch([
+    auditEventStatement(db, {
+      actorUserId: c.get("user")?.id ?? null,
+      actorEmail: c.get("user")?.email ?? null,
+      entity: "partner",
+      entityId: gate.partnerId ?? "unassigned",
+      action: "pilot_gate_blocked",
+      payload: { requestId: request.id, route: new URL(c.req.url).pathname },
+    }),
+  ]);
+  return c.json(
+    {
+      error: "pilot_gate_required",
+      message:
+        "the booking interface is part of the paid pilot — listing and matching stay free; ask about a booking pilot agreement",
+      partnerId: gate.partnerId,
+      readOnly: true,
+    },
+    403,
+  );
+});
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -75,7 +115,7 @@ bookingRouter.post("/requests/:id/bookings/request", async (c) => {
   if (typeof range === "string") return c.json({ error: range }, 400);
 
   const trade = typeof b.trade === "string" ? b.trade : "";
-  if (!isTrade(trade)) return c.json({ error: "invalid_trade" }, 400);
+  if (!(await isKnownCatalogTrade(db, trade))) return c.json({ error: "invalid_trade" }, 400);
   const tradeRows = await db.select().from(requestTrades).where(eq(requestTrades.requestId, id));
   if (!tradeRows.some((t) => t.trade === trade)) {
     return c.json({ error: `trade_not_required: ${trade} is not in the request's trades` }, 400);
@@ -104,6 +144,12 @@ bookingRouter.post("/requests/:id/bookings/request", async (c) => {
   } else {
     return c.json({ error: "responseId_required" }, 400);
   }
+
+  // Phase 4: the calendar is the stronger signal — declared-free capacity
+  // does not override a busy provider calendar (route-layer check; the
+  // declaration triggers remain the DB-level invariant).
+  const conflict = await findCalendarConflict(db, companyId, range.startDate, range.endDate);
+  if (conflict) return c.json(calendarConflictResponse(conflict), 409);
 
   const inserted = await db
     .insert(bookingRequests)
@@ -171,6 +217,10 @@ bookingRouter.post("/requests/:id/bookings/confirm", async (c) => {
   if (!br || br.requestId !== id) return c.json({ error: "booking_request_not_found" }, 404);
   if (br.state !== "requested")
     return c.json({ error: `booking_request_is_${br.state}` }, 400);
+
+  // Phase 4: confirm-time calendar re-check bounds the staleness window.
+  const confirmConflict = await findCalendarConflict(db, br.companyId, br.startDate, br.endDate);
+  if (confirmConflict) return c.json(calendarConflictResponse(confirmConflict), 409);
 
   const now = new Date().toISOString();
   const batch: unknown[] = [
@@ -315,7 +365,7 @@ bookingRouter.post("/requests/:id/holds", async (c) => {
   const range = parseRange(b);
   if (typeof range === "string") return c.json({ error: range }, 400);
   const trade = typeof b.trade === "string" ? b.trade : "";
-  if (!isTrade(trade)) return c.json({ error: "invalid_trade" }, 400);
+  if (!(await isKnownCatalogTrade(db, trade))) return c.json({ error: "invalid_trade" }, 400);
   const companyId = typeof b.companyId === "string" ? b.companyId : "";
   if (!companyId) return c.json({ error: "company_id_required" }, 400);
   const tradeRows = await db.select().from(requestTrades).where(eq(requestTrades.requestId, id));
@@ -380,4 +430,282 @@ bookingRouter.post("/holds/:id/release", async (c) => {
     .where(eq(holds.id, id))
     .returning();
   return c.json(updated[0]);
+});
+
+/**
+ * Phase 3: reschedule a confirmed booking — propose, then confirm or reject.
+ * Confirming updates the booking row; the BEFORE UPDATE capacity trigger
+ * enforces first-confirmed-wins for the new window (same `capacity_conflict`
+ * as insertion). Proposal history is retained.
+ */
+bookingRouter.post("/requests/:id/bookings/reschedule", async (c) => {
+  const db = drizzle(c.env.DB);
+  const user = c.get("user");
+  const id = c.req.param("id");
+  const request = await getRequestOr404(c, id);
+  if (!request) return;
+  if (request.status !== "booked")
+    return c.json({ error: "reschedule_requires_booked_request" }, 400);
+
+  const booking = (
+    await db.select().from(bookings).where(eq(bookings.requestId, id)).limit(1)
+  )[0];
+  if (!booking || booking.outcome)
+    return c.json({ error: "no_live_booking_for_request" }, 400);
+
+  const body = await c.req.json().catch(() => null);
+  if (!body || typeof body !== "object") return c.json({ error: "invalid_json" }, 400);
+  const b = body as Record<string, unknown>;
+  const range = parseRange(b);
+  if (typeof range === "string") return c.json({ error: range }, 400);
+
+  const open = (
+    await db
+      .select()
+      .from(bookingReschedules)
+      .where(and(eq(bookingReschedules.bookingId, booking.id), eq(bookingReschedules.state, "proposed")))
+      .limit(1)
+  )[0];
+  if (open)
+    return c.json({ error: "proposal_already_open", proposalId: open.id }, 409);
+
+  const inserted = await db
+    .insert(bookingReschedules)
+    .values({
+      bookingId: booking.id,
+      ...range,
+      reason: typeof b.reason === "string" ? b.reason : null,
+      proposedBy: user.id,
+    })
+    .returning();
+  const proposal = inserted[0]!;
+
+  await db.batch([
+    auditEventStatement(db, {
+      actorUserId: user.id,
+      actorEmail: user.email,
+      entity: "request",
+      entityId: id,
+      action: "booking_rescheduled",
+      payload: {
+        proposalId: proposal.id,
+        bookingId: booking.id,
+        state: "proposed",
+        startDate: range.startDate,
+        endDate: range.endDate,
+        workersCount: range.workersCount,
+        reason: proposal.reason,
+      },
+    }),
+  ]);
+  return c.json(proposal, 201);
+});
+
+async function getProposalContext(c: any, requestId: string, proposalId: string) {
+  const db = drizzle(c.env.DB);
+  const proposal = (
+    await db.select().from(bookingReschedules).where(eq(bookingReschedules.id, proposalId)).limit(1)
+  )[0];
+  if (!proposal) {
+    await c.json({ error: "not_found" }, 404);
+    return null;
+  }
+  const booking = (
+    await db.select().from(bookings).where(eq(bookings.id, proposal.bookingId)).limit(1)
+  )[0];
+  if (!booking || booking.requestId !== requestId) {
+    await c.json({ error: "not_found" }, 404);
+    return null;
+  }
+  return { db, proposal, booking };
+}
+
+bookingRouter.post("/requests/:id/bookings/reschedule/:proposalId/confirm", async (c) => {
+  const db = drizzle(c.env.DB);
+  const user = c.get("user");
+  const id = c.req.param("id");
+  const proposalId = c.req.param("proposalId");
+  const request = await getRequestOr404(c, id);
+  if (!request) return;
+
+  const ctx = await getProposalContext(c, id, proposalId);
+  if (!ctx) return;
+  const { proposal, booking } = ctx;
+  if (proposal.state !== "proposed")
+    return c.json({ error: `proposal_is_${proposal.state}` }, 400);
+  if (booking.outcome) return c.json({ error: "booking_no_longer_live" }, 400);
+
+  // Phase 4: the new window must respect the provider's calendar too.
+  const rescheduleConflict = await findCalendarConflict(
+    db,
+    booking.companyId,
+    proposal.startDate,
+    proposal.endDate,
+  );
+  if (rescheduleConflict) return c.json(calendarConflictResponse(rescheduleConflict), 409);
+
+  const now = new Date().toISOString();
+  const batch: unknown[] = [
+    db
+      .update(bookingReschedules)
+      .set({ state: "confirmed", resolvedBy: user.id, updatedAt: now })
+      .where(eq(bookingReschedules.id, proposal.id)),
+    db
+      .update(bookings)
+      .set({
+        startDate: proposal.startDate,
+        endDate: proposal.endDate,
+        workersCount: proposal.workersCount,
+      })
+      .where(eq(bookings.id, booking.id)),
+    auditEventStatement(db, {
+      actorUserId: user.id,
+      actorEmail: user.email,
+      entity: "request",
+      entityId: id,
+      action: "booking_rescheduled",
+      payload: {
+        proposalId: proposal.id,
+        bookingId: booking.id,
+        state: "confirmed",
+        from: {
+          startDate: booking.startDate,
+          endDate: booking.endDate,
+          workersCount: booking.workersCount,
+        },
+        to: {
+          startDate: proposal.startDate,
+          endDate: proposal.endDate,
+          workersCount: proposal.workersCount,
+        },
+      },
+    }),
+  ];
+  try {
+    await db.batch(batch as unknown as [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]]);
+  } catch (e) {
+    if (String(e).includes("capacity_conflict")) {
+      const winners = await db
+        .select()
+        .from(bookings)
+        .where(and(eq(bookings.companyId, booking.companyId), eq(bookings.trade, booking.trade)));
+      const winner = winners.find(
+        (w) =>
+          w.id !== booking.id &&
+          w.outcome === null &&
+          w.startDate <= proposal.endDate &&
+          w.endDate >= proposal.startDate,
+      );
+      return c.json(
+        {
+          error: "capacity_conflict",
+          message: "provider capacity already committed for the requested window",
+          winner: winner
+            ? { bookingId: winner.id, requestId: winner.requestId, startDate: winner.startDate, endDate: winner.endDate }
+            : null,
+        },
+        409,
+      );
+    }
+    throw e;
+  }
+
+  const updated = (await db.select().from(bookings).where(eq(bookings.id, booking.id)).limit(1))[0]!;
+  return c.json({ booking: updated, proposalId: proposal.id }, 200);
+});
+
+bookingRouter.post("/requests/:id/bookings/reschedule/:proposalId/reject", async (c) => {
+  const db = drizzle(c.env.DB);
+  const user = c.get("user");
+  const id = c.req.param("id");
+  const proposalId = c.req.param("proposalId");
+  const request = await getRequestOr404(c, id);
+  if (!request) return;
+
+  const ctx = await getProposalContext(c, id, proposalId);
+  if (!ctx) return;
+  const { proposal } = ctx;
+  if (proposal.state !== "proposed")
+    return c.json({ error: `proposal_is_${proposal.state}` }, 400);
+
+  const now = new Date().toISOString();
+  await db.batch([
+    db
+      .update(bookingReschedules)
+      .set({ state: "rejected", resolvedBy: user.id, updatedAt: now })
+      .where(eq(bookingReschedules.id, proposal.id)),
+    auditEventStatement(db, {
+      actorUserId: user.id,
+      actorEmail: user.email,
+      entity: "request",
+      entityId: id,
+      action: "booking_rescheduled",
+      payload: { proposalId: proposal.id, state: "rejected" },
+    }),
+  ]);
+  return c.json({ ok: true, proposalId: proposal.id, state: "rejected" });
+});
+
+/**
+ * Phase 3: booking-level cancellation with mandatory attribution. Distinct
+ * from request cancellation: the booking is marked cancelled with who and
+ * why, and the parent request returns to `responded` so it can be re-booked.
+ */
+bookingRouter.post("/requests/:id/bookings/cancel", async (c) => {
+  const db = drizzle(c.env.DB);
+  const user = c.get("user");
+  const id = c.req.param("id");
+  const request = await getRequestOr404(c, id);
+  if (!request) return;
+  if (request.status !== "booked")
+    return c.json({ error: "booking_cancel_requires_booked_request" }, 400);
+
+  const booking = (
+    await db.select().from(bookings).where(eq(bookings.requestId, id)).limit(1)
+  )[0];
+  if (!booking || booking.outcome)
+    return c.json({ error: "no_live_booking_for_request" }, 400);
+
+  const body = await c.req.json().catch(() => null);
+  if (!body || typeof body !== "object") return c.json({ error: "invalid_json" }, 400);
+  const b = body as Record<string, unknown>;
+  const cancelledBy = typeof b.cancelledBy === "string" ? b.cancelledBy : "";
+  if (!["customer", "provider"].includes(cancelledBy))
+    return c.json({ error: "attribution_required: cancelledBy must be customer or provider" }, 400);
+  const reason = typeof b.reason === "string" && b.reason.trim() ? b.reason.trim() : "";
+  if (!reason) return c.json({ error: "reason_required" }, 400);
+
+  const now = new Date().toISOString();
+  await db.batch([
+    db
+      .update(bookings)
+      .set({
+        outcome: "cancelled",
+        outcomeReason: reason,
+        outcomeAt: now,
+        cancelledBy,
+        cancelReason: reason,
+        cancelledAt: now,
+      })
+      .where(eq(bookings.id, booking.id)),
+    db
+      .update(requests)
+      .set({ status: "responded", updatedAt: now })
+      .where(eq(requests.id, id)),
+    auditEventStatement(db, {
+      actorUserId: user.id,
+      actorEmail: user.email,
+      entity: "request",
+      entityId: id,
+      action: "booking_cancelled",
+      payload: {
+        bookingId: booking.id,
+        companyId: booking.companyId,
+        cancelledBy,
+        reason,
+      },
+    }),
+  ]);
+  const updated = (await db.select().from(bookings).where(eq(bookings.id, booking.id)).limit(1))[0]!;
+  return c.json({ booking: updated, requestStatus: "responded" }, 200);
 });

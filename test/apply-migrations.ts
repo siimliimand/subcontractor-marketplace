@@ -6,6 +6,8 @@ import migration2 from "../migrations/0002_email_pipeline.sql?raw";
 import migration3 from "../migrations/0003_phase2_multitrade_availability.sql?raw";
 import migration4 from "../migrations/0004_phase2_booking_hardening.sql?raw";
 import migration5 from "../migrations/0005_phase2_brief_proposals.sql?raw";
+import migration6 from "../migrations/0006_phase3_pilot.sql?raw";
+import migration7 from "../migrations/0007_phase4_expansion.sql?raw";
 import { makeAccessKey, TEAM_DOMAIN } from "./helpers/access";
 
 function toStatements(sql: string): string[] {
@@ -80,6 +82,8 @@ beforeAll(async () => {
     ["0003_phase2_multitrade_availability", migration3],
     ["0004_phase2_booking_hardening", migration4],
     ["0005_phase2_brief_proposals", migration5],
+    ["0006_phase3_pilot", migration6],
+    ["0007_phase4_expansion", migration7],
   ];
   for (const [tag, sqlText] of migrations) {
     if (applied.has(tag)) continue;

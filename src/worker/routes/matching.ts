@@ -5,15 +5,69 @@ import { drizzle } from "drizzle-orm/d1";
 import { outreachEntries, requestTrades, requests, users } from "../db/schema";
 import type { AppEnv } from "../app";
 import { auditEventStatement } from "../events";
-import { isTrade, type Trade } from "../config";
+import { listTrades } from "../catalog";
+import type { Trade } from "../config";
 import {
   applyDiversityCap,
   INITIAL_BATCH_SIZE,
   selectCandidates,
   WIDENED_BATCH_SIZE,
 } from "../matching/engine";
+import {
+  DEFAULT_WEIGHTS,
+  isMatchFactorKey,
+} from "../matching/weights";
+import {
+  getEffectiveWeights,
+  listWeightHistory,
+  setWeight,
+} from "../matching/runtimeWeights";
 
 export const matchingRouter = new Hono<AppEnv>();
+
+/**
+ * Phase 3 learning loop: runtime-tunable ranking weights. GET returns the
+ * effective weights (defaults + latest overrides) with history; PUT appends
+ * an override row (reason required) so pilot tuning never needs a redeploy
+ * and stays auditable. Payment is not a factor and cannot become one.
+ */
+matchingRouter.get("/matching/weights", async (c) => {
+  const db = drizzle(c.env.DB);
+  const { weights, overrides } = await getEffectiveWeights(db);
+  const history = await listWeightHistory(db);
+  return c.json({
+    weights,
+    defaults: DEFAULT_WEIGHTS,
+    overrides,
+    history,
+  });
+});
+
+matchingRouter.put("/matching/weights", async (c) => {
+  const db = drizzle(c.env.DB);
+  const user = c.get("user");
+  const body = await c.req.json().catch(() => null);
+  if (!body || typeof body !== "object") return c.json({ error: "invalid_json" }, 400);
+  const b = body as Record<string, unknown>;
+
+  const factor = typeof b.factor === "string" ? b.factor : "";
+  if (!isMatchFactorKey(factor)) {
+    return c.json(
+      { error: "invalid_factor: allowed factors confirmedCapacity, specialisationDepth, responseHistory, reliability, proximity, reviewQuality, priceFit" },
+      400,
+    );
+  }
+  const weight = b.weight;
+  if (typeof weight !== "number" || !Number.isFinite(weight) || weight < 0 || weight > 1) {
+    return c.json({ error: "invalid_weight: must be a number between 0 and 1" }, 400);
+  }
+  const reason = typeof b.reason === "string" ? b.reason.trim() : "";
+  if (!reason) return c.json({ error: "reason_required" }, 400);
+
+  await setWeight(db, { factor, weight, reason, setBy: user.id });
+  const { weights } = await getEffectiveWeights(db);
+  return c.json({ ok: true, factor, weight, weights }, 200);
+});
 
 function matchBatchNumber(suffix = ""): string {
   return `M-${new Date().toISOString().slice(0, 10)}-${Math.random().toString(36).slice(2, 7)}${suffix}`;
@@ -50,9 +104,12 @@ matchingRouter.post("/requests/:id/match", async (c) => {
     .select()
     .from(requestTrades)
     .where(eq(requestTrades.requestId, id));
-  const trades = tradeRows
-    .map((t) => t.trade)
-    .filter((t): t is Trade => isTrade(t));
+  // Phase 4: the catalog is the trade vocabulary. Known-but-deactivated
+  // trades still match (in-flight requests keep working); unknown slugs
+  // cannot be matched at all.
+  const catalog = await listTrades(db);
+  const catalogSlugs = new Set(catalog.map((t) => t.slug));
+  const trades = tradeRows.map((t) => t.trade).filter((t) => catalogSlugs.has(t)) as Trade[];
   if (trades.length === 0) return c.json({ error: "matching_refused: no required trades" }, 400);
 
   const contacted = await db
@@ -124,7 +181,7 @@ matchingRouter.post("/requests/:id/match", async (c) => {
           channel: "matching",
           trade: cand.trade,
           matchScore: cand.score,
-          matchFactorsJson: JSON.stringify(cand.factors),
+          matchFactorsJson: JSON.stringify({ factors: cand.factors, weights: run.weights }),
         }),
       );
     }
@@ -155,6 +212,7 @@ matchingRouter.post("/requests/:id/match", async (c) => {
       trade,
       batchNumber,
       created: picks.length,
+      regionFilter: run.regionFilter,
       candidates: picks.map((cand) => ({
         companyId: cand.companyId,
         legalName: cand.legalName,

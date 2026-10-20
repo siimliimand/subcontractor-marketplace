@@ -4,20 +4,25 @@ import type { BatchItem } from "drizzle-orm/batch";
 import { drizzle } from "drizzle-orm/d1";
 import {
   auditEvents,
+  availabilityDeclarations,
   bookingRequests,
+  bookingReschedules,
   bookings,
   companies,
   holds,
   outreachEntries,
+  partners,
   requestTrades,
   requests,
   responses,
   timeEntries,
   users,
 } from "../db/schema";
+import { freshness } from "../availability";
 import type { AppEnv } from "../app";
 import { auditEventStatement, type EventAction } from "../events";
-import { isTrade, type RequestStatus, type Trade } from "../config";
+import { type RequestStatus, type Trade } from "../config";
+import { activeTradeSlugs, isCatalogRegion, isKnownCatalogTrade } from "../catalog";
 import { canTransition, PRE_BOOKED_STATUSES } from "../lifecycle";
 import { buildComparison } from "../comparison";
 
@@ -26,20 +31,18 @@ export const requestsRouter = new Hono<AppEnv>();
 /**
  * Multi-trade requests (Decision 3): accept `trades: string[]` (new) or the
  * legacy single `trade`. Returns the deduplicated trade set in order — the
- * first entry is the primary trade — or an error string.
+ * first entry is the primary trade — or an error string. Phase 4: allowed
+ * slugs come from the catalog (active trades only for new records).
  */
-function parseTrades(b: Record<string, unknown>): { trades?: Trade[]; error?: string } {
+function parseTrades(b: Record<string, unknown>, allowed: string[]): { trades?: Trade[]; error?: string } {
   if (b.trades === undefined && b.trade === undefined) return {};
   const raw = b.trades !== undefined ? b.trades : [b.trade];
   if (!Array.isArray(raw)) return { error: "trades_must_be_an_array" };
   const trades: Trade[] = [];
   for (const t of raw) {
-    if (typeof t !== "string" || !isTrade(t))
-      return {
-        error:
-          "invalid_trade: allowed trades electrical, plumbing, hvac, drywall, flooring, painting",
-      };
-    if (!trades.includes(t)) trades.push(t);
+    if (typeof t !== "string" || !allowed.includes(t))
+      return { error: "invalid_trade: trade is not in the active catalog" };
+    if (!trades.includes(t as Trade)) trades.push(t as Trade);
   }
   if (trades.length === 0) return { error: "at_least_one_trade_required" };
   return { trades };
@@ -110,21 +113,30 @@ requestsRouter.post("/", async (c) => {
     startDate: typeof b.startDate === "string" ? b.startDate : "",
     crewSize: typeof b.crewSize === "number" ? b.crewSize : 0,
   };
-  const parsed = parseTrades(b);
+  const parsed = parseTrades(b, await activeTradeSlugs(db));
   if (parsed.error) return c.json({ error: parsed.error }, 400);
-  const trades = parsed.trades ?? (isTrade(candidate.trade) ? [candidate.trade] : []);
-  candidate.trade = trades[0] ?? candidate.trade;
-  if (!isTrade(candidate.trade))
-    return c.json(
-      {
-        error:
-          "invalid_trade: allowed trades electrical, plumbing, hvac, drywall, flooring, painting",
-      },
-      400,
-    );
+  const trades = parsed.trades ?? [];
+  candidate.trade = trades[0] ?? "";
+  if (trades.length === 0)
+    return c.json({ error: "invalid_trade: trade is not in the active catalog" }, 400);
   const missing = requiredFieldsPresent(candidate);
   if (missing.length) return c.json({ error: `missing_required_fields: ${missing.join(", ")}` }, 400);
   if (candidate.crewSize < 1) return c.json({ error: "crew_size_must_be_positive" }, 400);
+
+  // Phase 4: optional region (validated against the catalog) and partner
+  // (monetization gating) on requests.
+  let region: string | null = null;
+  if (typeof b.region === "string" && b.region.trim()) {
+    if (!(await isCatalogRegion(db, b.region.trim())))
+      return c.json({ error: `invalid_region: ${b.region.trim()} is not in the catalog` }, 400);
+    region = b.region.trim();
+  }
+  let partnerId: string | null = null;
+  if (typeof b.partnerId === "string" && b.partnerId) {
+    const partner = await db.select().from(partners).where(eq(partners.id, b.partnerId)).limit(1);
+    if (partner.length === 0) return c.json({ error: "partner_not_found" }, 400);
+    partnerId = b.partnerId;
+  }
 
   const inserted = await db
     .insert(requests)
@@ -134,6 +146,8 @@ requestsRouter.post("/", async (c) => {
       duration: typeof b.duration === "string" ? b.duration : null,
       notes: typeof b.notes === "string" ? b.notes : null,
       pmName: typeof b.pmName === "string" ? b.pmName : null,
+      region,
+      partnerId,
       status: "draft",
       createdBy: user.id,
     })
@@ -206,7 +220,54 @@ requestsRouter.get("/:id", async (c) => {
     id,
     trades.map((t) => ({ trade: t.trade, isPrimary: t.isPrimary === 1 })),
     request.startDate,
+    { mtrEnabled: c.env.MTR_BADGES_ENABLED === "true" },
   );
+
+  // Phase 3: reschedule history and freshness-driven reconfirmation prompts
+  // for live bookings (details/03 — reconfirmation required when the covering
+  // declaration is aging/stale/expired or missing entirely).
+  const bookingIds = requestBookings.map((b) => b.booking.id);
+  const rescheduleRows = bookingIds.length
+    ? await db
+        .select()
+        .from(bookingReschedules)
+        .where(inArray(bookingReschedules.bookingId, bookingIds))
+        .orderBy(asc(bookingReschedules.createdAt))
+    : [];
+  const reconfirmations: Record<string, { required: boolean; worstState: string | null }> = {};
+  for (const { booking } of requestBookings) {
+    if (booking.outcome) {
+      reconfirmations[booking.id] = { required: false, worstState: null };
+      continue;
+    }
+    const decls = (
+      await db
+        .select()
+        .from(availabilityDeclarations)
+        .where(
+          and(
+            eq(availabilityDeclarations.companyId, booking.companyId),
+            eq(availabilityDeclarations.trade, booking.trade),
+          ),
+        )
+    ).filter((d) => d.dateFrom <= booking.endDate && d.dateTo >= booking.startDate);
+    if (decls.length === 0) {
+      reconfirmations[booking.id] = { required: true, worstState: "expired" };
+      continue;
+    }
+    // The provider's most recent confirmation reflects their current claim —
+    // a reconfirm supersedes older declarations rather than stacking with
+    // them (details/03: "reconfirmation required when availability data goes
+    // stale", cleared by the fresh confirmation).
+    const latest = decls.reduce((acc, d) =>
+      d.lastConfirmedAt > acc.lastConfirmedAt ? d : acc,
+    );
+    const state = freshness(latest.lastConfirmedAt);
+    reconfirmations[booking.id] = {
+      required: state !== "current",
+      worstState: state,
+    };
+  }
 
   return c.json({
     request,
@@ -219,6 +280,8 @@ requestsRouter.get("/:id", async (c) => {
     comparison,
     timeEntries: requestTime,
     events,
+    reschedules: rescheduleRows,
+    reconfirmations,
   });
 });
 
@@ -243,7 +306,7 @@ requestsRouter.patch("/:id", async (c) => {
     }
   }
   if (b.trade !== undefined || b.trades !== undefined) {
-    const parsed = parseTrades(b);
+    const parsed = parseTrades(b, await activeTradeSlugs(db));
     if (parsed.error) return c.json({ error: parsed.error }, 400);
     if (!parsed.trades) return c.json({ error: "at_least_one_trade_required" }, 400);
     patch.trade = parsed.trades[0];
@@ -259,6 +322,15 @@ requestsRouter.patch("/:id", async (c) => {
     if (typeof b.crewSize !== "number" || b.crewSize < 1)
       return c.json({ error: "crew_size_must_be_positive" }, 400);
     patch.crewSize = b.crewSize;
+  }
+  // Phase 4: optional region update (validated against the catalog).
+  if (b.region !== undefined) {
+    if (b.region === null) patch.region = null;
+    else if (typeof b.region === "string" && b.region.trim()) {
+      if (!(await isCatalogRegion(db, b.region.trim())))
+        return c.json({ error: `invalid_region: ${b.region.trim()} is not in the catalog` }, 400);
+      patch.region = b.region.trim();
+    } else return c.json({ error: "invalid_region" }, 400);
   }
   for (const field of ["budget", "duration", "notes", "pmName"] as const) {
     if (b[field] !== undefined) {

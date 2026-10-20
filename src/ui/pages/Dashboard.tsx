@@ -10,6 +10,7 @@ type Metrics = {
   successRate: number | null;
   conversion: number | null;
   medianHoursToFirstQualified: number | null;
+  bookingFlow?: { requested: number; confirmed: number; conversion: number | null };
   email?: {
     sent: number;
     delivered: number;
@@ -18,6 +19,26 @@ type Metrics = {
     automatedQualified: number;
     manualQualified: number;
   };
+};
+
+type WeeklyRow = {
+  week: string;
+  newPms: number;
+  activePms: number;
+  newRequests: number;
+  completedRequests: number;
+  successRate: number | null;
+  medianHoursToFirstQualified: number | null;
+  providersContacted: number;
+  providersContactedPerRequest: number | null;
+  bookingConfirmed: number;
+  bookingConversion: number | null;
+  availabilityConfirmationRate: number | null;
+  failedCommitments: number;
+  repeatUsage: number | null;
+  manualMinutes: number;
+  manualEvents: number;
+  adoptionShare: number | null;
 };
 
 type SupplyRow = {
@@ -50,6 +71,7 @@ export default function Dashboard() {
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [supply, setSupply] = useState<SupplyRow[]>([]);
   const [effort, setEffort] = useState<EffortData | null>(null);
+  const [weekly, setWeekly] = useState<WeeklyRow[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -60,11 +82,13 @@ export default function Dashboard() {
       get<Metrics>(`/dashboard/overview${params ? `?${params}` : ""}`),
       get<SupplyRow[]>("/dashboard/supply"),
       get<EffortData>("/dashboard/effort"),
+      get<{ weeks: WeeklyRow[] }>(`/dashboard/weekly${params ? `?${params}` : ""}`),
     ])
-      .then(([m, s, e]) => {
+      .then(([m, s, e, w]) => {
         setMetrics(m);
         setSupply(s);
         setEffort(e);
+        setWeekly(w.weeks);
       })
       .catch((e) => setError(String(e)));
   }, [from, to]);
@@ -126,6 +150,88 @@ export default function Dashboard() {
           />
         </div>
       )}
+
+      {/* Phase 3: booking funnel + adoption — previously API-only, now rendered. */}
+      {metrics?.bookingFlow && (
+        <div className="grid grid-cols-3 gap-4 mb-8">
+          <MetricCard
+            title="Booking funnel — requested"
+            value={String(metrics.bookingFlow.requested)}
+            detail="tentative booking requests (not commitments)"
+          />
+          <MetricCard
+            title="Booking funnel — confirmed"
+            value={String(metrics.bookingFlow.confirmed)}
+            detail="confirmed bookings only"
+          />
+          <MetricCard
+            title="Requested → confirmed"
+            value={pct(metrics.bookingFlow.conversion)}
+            detail="first confirmed booking wins"
+          />
+        </div>
+      )}
+
+      <section className="mb-8">
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="font-semibold">Weekly pilot dashboard</h2>
+          <a
+            href={`/api/dashboard/export.csv${from || to ? `?${new URLSearchParams(Object.entries({ from, to }).filter(([, v]) => v !== "")).toString()}` : ""}`}
+            className="text-sm text-blue-600 hover:underline"
+          >
+            Export CSV
+          </a>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full bg-white rounded border text-xs">
+            <thead className="bg-gray-50 text-left text-gray-600">
+              <tr>
+                <th className="p-2">Week</th>
+                <th className="p-2">New / active PMs</th>
+                <th className="p-2">New reqs</th>
+                <th className="p-2">Completed</th>
+                <th className="p-2">Success ≤24h</th>
+                <th className="p-2">Median resp. (bh)</th>
+                <th className="p-2">Contacted / req</th>
+                <th className="p-2">Bookings</th>
+                <th className="p-2">Conversion</th>
+                <th className="p-2">Avail. confirmed</th>
+                <th className="p-2">Failed commit.</th>
+                <th className="p-2">Repeat usage</th>
+                <th className="p-2">Manual effort</th>
+                <th className="p-2">Adoption</th>
+              </tr>
+            </thead>
+            <tbody>
+              {weekly.map((w) => (
+                <tr key={w.week} className="border-t">
+                  <td className="p-2 font-medium">{w.week}</td>
+                  <td className="p-2">{w.newPms} / {w.activePms}</td>
+                  <td className="p-2">{w.newRequests}</td>
+                  <td className="p-2">{w.completedRequests}</td>
+                  <td className="p-2">{pct(w.successRate)}</td>
+                  <td className="p-2">{w.medianHoursToFirstQualified === null ? "—" : w.medianHoursToFirstQualified.toFixed(1)}</td>
+                  <td className="p-2">{w.providersContactedPerRequest === null ? "—" : w.providersContactedPerRequest.toFixed(1)}</td>
+                  <td className="p-2">{w.bookingConfirmed}</td>
+                  <td className="p-2">{pct(w.bookingConversion)}</td>
+                  <td className="p-2">{pct(w.availabilityConfirmationRate)}</td>
+                  <td className="p-2">{w.failedCommitments}</td>
+                  <td className="p-2">{pct(w.repeatUsage)}</td>
+                  <td className="p-2">{w.manualMinutes} min / {w.manualEvents} ev</td>
+                  <td className="p-2">{pct(w.adoptionShare)}</td>
+                </tr>
+              ))}
+              {weekly.length === 0 && (
+                <tr>
+                  <td className="p-2 text-gray-400" colSpan={14}>
+                    No activity in range.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
 
       {metrics?.email && (
         <section className="mb-8">

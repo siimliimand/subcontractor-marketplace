@@ -108,7 +108,7 @@ describe("provider administration", () => {
       body: JSON.stringify({ trade: "welding", serviceArea: "Tallinn", pricingModel: "m2" }),
     });
     expect(badTrade.status).toBe(400);
-    expect(((await badTrade.json()) as { error: string }).error).toContain("electrical");
+    expect(((await badTrade.json()) as { error: string }).error).toContain("invalid_trade");
 
     const badModel = await SELF.fetch(`https://example.com/api/providers/${provider.id}/services`, {
       method: "POST",

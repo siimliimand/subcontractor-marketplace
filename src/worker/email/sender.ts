@@ -192,10 +192,11 @@ export async function sendOutreachEmailBatch(
         entityId: entryId,
         action: "email_sent",
         channel: "automated",
+        // Phase 3 minimisation: the recipient address is NOT embedded —
+        // the outreach entry (entityId) carries the provider reference.
         payload: {
           requestId: params.requestId,
           companyId,
-          to: provider.contactEmail,
           subject: email.subject,
         },
       }),

@@ -35,7 +35,12 @@ export type BriefProposal = {
 
 type AiBinding = { run(model: string, inputs: unknown): Promise<unknown> };
 
-const VALID_TRADES = [
+/**
+ * Phase 4: the trade vocabulary comes from the catalog. `validateBrief`
+ * stays sync (pure) and takes the allowed slugs; callers load them via
+ * `activeTradeSlugs` (built-in pilot trades as fallback when unset).
+ */
+const FALLBACK_TRADES = [
   "electrical",
   "plumbing",
   "hvac",
@@ -55,7 +60,7 @@ function str(v: unknown): string | null {
  * does not support (per the model) are nulled and reported missing. Values
  * that fail type/format checks are dropped the same way.
  */
-export function validateBrief(raw: unknown): BriefProposal {
+export function validateBrief(raw: unknown, allowedTrades: string[] = FALLBACK_TRADES): BriefProposal {
   const src = (typeof raw === "object" && raw !== null ? raw : {}) as Record<string, unknown>;
   const tradesRaw = src.trades;
   const crewRaw = src.crewSize;
@@ -69,7 +74,7 @@ export function validateBrief(raw: unknown): BriefProposal {
         : null,
     duration: str(src.duration),
     trades: Array.isArray(tradesRaw)
-      ? tradesRaw.filter((t): t is string => typeof t === "string" && VALID_TRADES.includes(t))
+      ? tradesRaw.filter((t): t is string => typeof t === "string" && allowedTrades.includes(t))
       : null,
     crewSize:
       crewRaw === null || crewRaw === undefined || crewRaw === ""

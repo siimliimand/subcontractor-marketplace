@@ -3,7 +3,7 @@ import { drizzle } from "drizzle-orm/d1";
 import type { BatchItem } from "drizzle-orm/batch";
 import { and, eq, isNull } from "drizzle-orm";
 import type { Bindings } from "../app";
-import { companies, emailTokens, outreachEntries, requests } from "../db/schema";
+import { companies, emailTokens, outreachEntries, requests, availabilityDeclarations, auditEvents } from "../db/schema";
 import type { EmailTokenPurpose } from "../db/schema";
 import { auditEventStatement } from "../events";
 import { buildDeclineCancellation, buildRecordResponse } from "../responses";
@@ -64,12 +64,53 @@ function noLongerOpen(): Response {
   );
 }
 
-function confirmation(): Response {
+function confirmation(showAdoptionPrompt = false): Response {
+  // Phase 3 adoption funnel: one-time prompt for email-only providers.
+  const promptHtml = showAdoptionPrompt
+    ? '<div style="margin-top:16px;padding:12px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px">' +
+      '<p style="margin:0 0 4px 0;font-weight:600;color:#0369a1">Tired of answering by email?</p>' +
+      '<p style="margin:0;color:#555">You can keep your crew availability up to date yourself in our booking system — ' +
+      'it takes one minute a week and you choose which requests you see. ' +
+      'Reply to any of our emails with "booking" and we will set you up.</p></div>'
+    : "";
   return page(
     '<h1 style="color:#059669">Thank you!</h1>' +
-      '<p style="color:#555">Your answer has been recorded. The general contractor will follow up if there is a fit.</p>',
+      '<p style="color:#555">Your answer has been recorded. The general contractor will follow up if there is a fit.</p>' +
+      promptHtml,
     200,
   );
+}
+
+/**
+ * Phase 3 adoption funnel (docs/details/03 — email fallback doubles as an
+ * adoption funnel): true when the provider's availability declarations are
+ * all `email_only` (no booking-system presence) and they have never been
+ * prompted before. The once-marker is an `adoption_prompted` audit event.
+ */
+async function evaluateAdoptionPrompt(
+  db: ReturnType<typeof drizzle>,
+  companyId: string,
+): Promise<boolean> {
+  const declarations = await db
+    .select()
+    .from(availabilityDeclarations)
+    .where(eq(availabilityDeclarations.companyId, companyId));
+  // No declarations at all → channel unknown; don't prompt.
+  if (declarations.length === 0) return false;
+  if (declarations.some((d) => d.channel === "booking_system")) return false;
+
+  const prompted = await db
+    .select({ id: auditEvents.id })
+    .from(auditEvents)
+    .where(
+      and(
+        eq(auditEvents.action, "adoption_prompted"),
+        eq(auditEvents.entity, "company"),
+        eq(auditEvents.entityId, companyId),
+      ),
+    )
+    .limit(1);
+  return prompted.length === 0;
 }
 
 type Brief = {
@@ -308,13 +349,33 @@ export function createPublicApp() {
           })
         : [];
 
+    // Phase 3 adoption funnel: email-only providers get a one-time booking
+    // system prompt on the confirmation page — accept/quote only (a decline
+    // is not the moment to pitch). Evaluated BEFORE the batch so the marker
+    // event this batch writes doesn't suppress its own prompt.
+    const companyId = entry.entry.companyId;
+    const showPrompt =
+      purpose !== "decline" && (await evaluateAdoptionPrompt(db, companyId));
     await db.batch([
       markEntryTokensUsedStatement(db, entry.entry.id),
       ...result.statements,
       ...cancelStatements,
+      ...(showPrompt
+        ? [
+            auditEventStatement(db, {
+              actorUserId: null,
+              actorEmail: null,
+              entity: "company",
+              entityId: companyId,
+              action: "adoption_prompted",
+              channel: "automated",
+              payload: { requestId: result.requestId, companyId },
+            }),
+          ]
+        : []),
     ] as unknown as [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]]);
 
-    return confirmation();
+    return confirmation(showPrompt);
   });
 
   app.get("/t/:file", async (c) => {

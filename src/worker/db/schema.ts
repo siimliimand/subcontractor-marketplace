@@ -1,4 +1,5 @@
 import { sqliteTable, text, integer, real, uniqueIndex, index } from "drizzle-orm/sqlite-core";
+import { sql } from "drizzle-orm";
 
 const uuid = () => text().$defaultFn(() => crypto.randomUUID());
 
@@ -70,6 +71,10 @@ export const requests = sqliteTable(
     duration: text(),
     notes: text(),
     pmName: text(),
+    // Phase 4: optional catalog region for region-aware matching, and the
+    // partner (design partner) the request belongs to for monetization gating.
+    region: text(),
+    partnerId: text().references(() => partners.id, { onDelete: "set null" }),
     status: text().notNull().default("draft"),
     cancelledBy: text(),
     cancelReason: text(),
@@ -179,6 +184,15 @@ export const bookings = sqliteTable(
     outcome: text(),
     outcomeReason: text(),
     outcomeAt: text(),
+    // Phase 3: booking-level cancellation attribution (distinct from the
+    // parent request's cancelledBy — a provider-cancelled booking leaves the
+    // request open for re-booking).
+    // Retention: kept for the life of the booking record (business record);
+    // cancelReason may contain free text — anonymised with the company via
+    // the erasure routine when it references contact details.
+    cancelledBy: text(),
+    cancelReason: text(),
+    cancelledAt: text(),
     createdBy: text()
       .notNull()
       .references(() => users.id),
@@ -187,6 +201,90 @@ export const bookings = sqliteTable(
   (t) => ({
     idx0: index("bookings_company_idx").on(t.companyId),
     idx1: index("bookings_company_trade_idx").on(t.companyId, t.trade),
+  }),
+);
+
+/**
+ * Phase 3: reschedule proposals on confirmed bookings — propose, then either
+ * confirm (re-runs the first-confirmed-wins capacity check via the UPDATE
+ * trigger) or reject. History is retained; the booking row only moves when a
+ * proposal is confirmed.
+ */
+export const bookingReschedules = sqliteTable(
+  "booking_reschedules",
+  {
+    id: uuid().primaryKey(),
+    bookingId: text()
+      .notNull()
+      .references(() => bookings.id, { onDelete: "cascade" }),
+    startDate: text().notNull(),
+    endDate: text().notNull(),
+    workersCount: integer().notNull(),
+    state: text().notNull().default("proposed"),
+    reason: text(),
+    proposedBy: text()
+      .notNull()
+      .references(() => users.id),
+    resolvedBy: text().references(() => users.id),
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+  },
+  (t) => ({
+    idx0: index("booking_reschedules_booking_idx").on(t.bookingId),
+  }),
+);
+
+/**
+ * Phase 3: register-backed verification badges, populated exclusively by the
+ * offline import scripts (no runtime register API calls). `trade` is null for
+ * company-wide checks (registry existence) and set for per-trade checks
+ * (MTR/Tarvik activity notices). Licence/attribution strings are stored per
+ * row so display can credit the source.
+ */
+export const companyVerifications = sqliteTable(
+  "company_verifications",
+  {
+    id: uuid().primaryKey(),
+    companyId: text()
+      .notNull()
+      .references(() => companies.id, { onDelete: "cascade" }),
+    type: text().notNull(),
+    trade: text(),
+    status: text().notNull(),
+    checkedAt: text().notNull(),
+    sourceDataset: text().notNull(),
+    sourceLicence: text().notNull(),
+    detailJson: text(),
+    createdAt: nowIso(),
+  },
+  (t) => ({
+    uq0: uniqueIndex("company_verifications_unique").on(
+      t.companyId,
+      t.type,
+      sql`coalesce(${t.trade}, '')`,
+    ),
+  }),
+);
+
+/**
+ * Phase 3: append-only ranking weight history. The effective weight per
+ * factor is the latest row; every change records who set it and why, and each
+ * match snapshots the weights it used into `matchFactorsJson`.
+ */
+export const matchWeights = sqliteTable(
+  "match_weights",
+  {
+    id: uuid().primaryKey(),
+    factor: text().notNull(),
+    weight: real().notNull(),
+    reason: text().notNull(),
+    setBy: text()
+      .notNull()
+      .references(() => users.id),
+    createdAt: nowIso(),
+  },
+  (t) => ({
+    idx0: index("match_weights_factor_idx").on(t.factor, t.createdAt),
   }),
 );
 
@@ -398,5 +496,235 @@ export const briefProposals = sqliteTable(
   },
   (t) => ({
     idx0: index("brief_proposals_request_idx").on(t.requestId),
+  }),
+);
+
+// --- Phase 4 (focused expansion) ---
+
+/** Trade catalog: adding a trade is a data change, not a deploy. */
+export const trades = sqliteTable("trades", {
+  slug: text().primaryKey(),
+  label: text().notNull(),
+  pilotMinimum: integer().notNull().default(4),
+  active: integer().notNull().default(1),
+  createdAt: nowIso(),
+});
+
+export const regions = sqliteTable("regions", {
+  slug: text().primaryKey(),
+  name: text().notNull(),
+  active: integer().notNull().default(1),
+  createdAt: nowIso(),
+});
+
+/** Provider coverage: which catalog regions a company works in (optional). */
+export const serviceRegions = sqliteTable(
+  "service_regions",
+  {
+    id: uuid().primaryKey(),
+    companyId: text()
+      .notNull()
+      .references(() => companies.id, { onDelete: "cascade" }),
+    regionSlug: text()
+      .notNull()
+      .references(() => regions.slug, { onDelete: "cascade" }),
+    createdAt: nowIso(),
+  },
+  (t) => ({
+    uq0: uniqueIndex("service_regions_company_region_unique").on(t.companyId, t.regionSlug),
+    idx0: index("service_regions_region_idx").on(t.regionSlug),
+  }),
+);
+
+/** PM-side design partners — the monetization gate keys off this entity. */
+export const partners = sqliteTable(
+  "partners",
+  {
+    id: uuid().primaryKey(),
+    name: text().notNull(),
+    slug: text().notNull().unique(),
+    notes: text(),
+    createdAt: nowIso(),
+  },
+  (t) => ({
+    uq0: uniqueIndex("partners_slug_unique").on(t.slug),
+  }),
+);
+
+/**
+ * Provider calendar feeds (phase 4): secret ICS URLs registered by staff.
+ * The URL is a secret — masked in every API response, never logged; fetch
+ * state (backoff, staleness) lives on the row so the cron is stateless.
+ */
+export const calendarFeeds = sqliteTable(
+  "calendar_feeds",
+  {
+    id: uuid().primaryKey(),
+    companyId: text()
+      .notNull()
+      .references(() => companies.id, { onDelete: "cascade" }),
+    url: text().notNull(),
+    label: text(),
+    state: text().notNull().default("active"),
+    failCount: integer().notNull().default(0),
+    nextAttemptAt: text(),
+    lastFetchAt: text(),
+    lastSuccessAt: text(),
+    lastStatus: text(),
+    unparsedCount: integer().notNull().default(0),
+    createdBy: text().references(() => users.id),
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+  },
+  (t) => ({
+    idx0: index("calendar_feeds_company_idx").on(t.companyId),
+  }),
+);
+
+/** Busy intervals derived from a feed — replaced wholesale on each success. */
+export const calendarBusyIntervals = sqliteTable(
+  "calendar_busy_intervals",
+  {
+    id: uuid().primaryKey(),
+    feedId: text()
+      .notNull()
+      .references(() => calendarFeeds.id, { onDelete: "cascade" }),
+    companyId: text()
+      .notNull()
+      .references(() => companies.id, { onDelete: "cascade" }),
+    startUtc: text().notNull(),
+    endUtc: text().notNull(),
+    createdAt: nowIso(),
+  },
+  (t) => ({
+    idx0: index("calendar_busy_company_start_idx").on(t.companyId, t.startUtc),
+    idx1: index("calendar_busy_feed_idx").on(t.feedId),
+  }),
+);
+
+/** Reviews tied to completed bookings: one per booking, disputable. */
+export const bookingReviews = sqliteTable(
+  "booking_reviews",
+  {
+    id: uuid().primaryKey(),
+    bookingId: text()
+      .notNull()
+      .unique()
+      .references(() => bookings.id, { onDelete: "cascade" }),
+    companyId: text()
+      .notNull()
+      .references(() => companies.id, { onDelete: "cascade" }),
+    rating: integer().notNull(),
+    comment: text(),
+    disputedAt: text(),
+    disputeReason: text(),
+    disputedBy: text().references(() => users.id),
+    createdBy: text()
+      .notNull()
+      .references(() => users.id),
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+  },
+  (t) => ({
+    uq0: uniqueIndex("booking_reviews_booking_unique").on(t.bookingId),
+    idx0: index("booking_reviews_company_idx").on(t.companyId),
+  }),
+);
+
+/** Hand-billed pilot agreements — no payment processing in the platform. */
+export const pilotAgreements = sqliteTable(
+  "pilot_agreements",
+  {
+    id: uuid().primaryKey(),
+    partnerId: text()
+      .notNull()
+      .references(() => partners.id, { onDelete: "cascade" }),
+    plan: text().notNull().default("booking_pilot"),
+    monthlyEur: real(),
+    startsAt: text().notNull(),
+    endsAt: text(),
+    status: text().notNull().default("active"),
+    notes: text(),
+    createdBy: text()
+      .notNull()
+      .references(() => users.id),
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+  },
+  (t) => ({
+    idx0: index("pilot_agreements_partner_idx").on(t.partnerId),
+  }),
+);
+
+export const PROVIDER_USER_ROLES = ["owner", "coordinator"] as const;
+export type ProviderUserRole = (typeof PROVIDER_USER_ROLES)[number];
+export const PROVIDER_USER_STATUSES = ["invited", "active", "disabled"] as const;
+export type ProviderUserStatus = (typeof PROVIDER_USER_STATUSES)[number];
+
+/** Multi-user provider accounts: named people per company, token login only. */
+export const providerUsers = sqliteTable(
+  "provider_users",
+  {
+    id: uuid().primaryKey(),
+    companyId: text()
+      .notNull()
+      .references(() => companies.id, { onDelete: "cascade" }),
+    email: text().notNull().unique(),
+    role: text().notNull().default("coordinator"),
+    status: text().notNull().default("invited"),
+    invitedBy: text().references(() => users.id),
+    lastLoginAt: text(),
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+  },
+  (t) => ({
+    uq0: uniqueIndex("provider_users_email_unique").on(t.email),
+    idx0: index("provider_users_company_idx").on(t.companyId),
+  }),
+);
+
+/** Single-use invite/login tokens for provider users (own table — the
+ * outreach email_tokens table is keyed to outreach entries). */
+export const providerUserTokens = sqliteTable(
+  "provider_user_tokens",
+  {
+    id: uuid().primaryKey(),
+    userId: text()
+      .notNull()
+      .references(() => providerUsers.id, { onDelete: "cascade" }),
+    jti: text().notNull().unique(),
+    purpose: text().notNull(),
+    expiresAt: text().notNull(),
+    usedAt: text(),
+    createdAt: nowIso(),
+  },
+  (t) => ({
+    uq0: uniqueIndex("provider_user_tokens_jti_unique").on(t.jti),
+    idx0: index("provider_user_tokens_user_idx").on(t.userId),
+  }),
+);
+
+/** Planner AI drafts + the feedback that builds the evaluation dataset. */
+export const projectPlans = sqliteTable(
+  "project_plans",
+  {
+    id: uuid().primaryKey(),
+    requestId: text()
+      .notNull()
+      .references(() => requests.id, { onDelete: "cascade" }),
+    planJson: text().notNull(),
+    model: text().notNull(),
+    promptHash: text(),
+    grounding: text(),
+    feedback: text(),
+    feedbackComment: text(),
+    feedbackAt: text(),
+    createdBy: text()
+      .notNull()
+      .references(() => users.id),
+    createdAt: nowIso(),
+  },
+  (t) => ({
+    idx0: index("project_plans_request_idx").on(t.requestId),
   }),
 );

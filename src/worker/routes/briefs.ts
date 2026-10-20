@@ -5,6 +5,7 @@ import { briefProposals } from "../db/schema";
 import type { BriefDraft } from "../ai/brief";
 import type { AppEnv } from "../app";
 import { auditEventStatement } from "../events";
+import { activeTradeSlugs } from "../catalog";
 import { BRIEF_MODEL, draftBrief, validateBrief } from "../ai/brief";
 
 export const briefsRouter = new Hono<AppEnv>();
@@ -76,7 +77,7 @@ briefsRouter.post("/briefs/:id/approve", async (c) => {
   if (!body || typeof body !== "object") return c.json({ error: "invalid_json" }, 400);
   const finalRaw = (body as Record<string, unknown>).final;
   // Staff-edited values go through the same sanitisation as the draft.
-  const { draft: final, missing } = validateBrief(finalRaw);
+  const { draft: final, missing } = validateBrief(finalRaw, await activeTradeSlugs(db));
 
   const updated = await db
     .update(briefProposals)

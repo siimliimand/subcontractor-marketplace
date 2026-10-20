@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ettevotjad>
+  <ettevotja>
+    <registriKood>12345678</registriKood>
+    <nimi>OÜ Test Electric AS</nimi>
+    <teatised>
+      <teatis>
+        <teatisNr>1</teatisNr>
+        <tegevusala><kood>43210</kood><nimetus>Elektritööd</nimetus></tegevusala>
+        <kehtivKuni>2027-12-31</kehtivKuni>
+      </teatis>
+      <teatis>
+        <teatisNr>2</teatisNr>
+        <tegevusala><kood>43340</kood><nimetus>Maalimis- ja klaasimistööd</nimetus></tegevusala>
+      </teatis>
+    </teatised>
+  </ettevotja>
+  <ettevotja>
+    <registriKood>34567890</registriKood>
+    <nimi>OÜ Fresh Painting</nimi>
+    <teatised>
+      <teatis>
+        <teatisNr>7</teatisNr>
+        <tegevusala><kood>43330</kood><nimetus>Põranda- ja seinvoodritööd</nimetus></tegevusala>
+        <kehtivKuni>2020-01-01</kehtivKuni>
+      </teatis>
+    </teatised>
+  </ettevotja>
+</ettevotjad>

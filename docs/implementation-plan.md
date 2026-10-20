@@ -127,6 +127,20 @@ flowchart LR
 
 **Goal:** ≥10 requests, proven conversion and repeat usage, visibly declining manual effort. This phase converts a demo into a workflow.
 
+> **Engineering status (2026-10-20, change `phase-3-repeatable-pilot`):** the engineering
+> track below has shipped — weekly dashboard with all 08 metrics + CSV export; hourly cron
+> (timeout-triggered outreach widening once toward 10 + retention purge); booking hardening
+> (tentative/confirmed labels, reschedule propose→confirm→record with DB-level capacity
+> guard, booking-level cancellation with attribution, freshness-driven reconfirmation with
+> one-click reconfirm, external-commitment disclaimer); verification badges ("Registered &
+> active" live via `scripts/import-ariregister.mjs`; "Trade notification valid" imported via
+> `scripts/import-mtr.mjs` but display-gated behind `MTR_BADGES_ENABLED` until the TTJA
+> licence confirmation); learning loop (outcome-driven reliability/response factors,
+> runtime-tunable audited weights, post-hoc "why this provider ranked here"); adoption
+> prompt for email-only providers; GDPR pass (suppression management, company erasure with
+> audit redaction, retention purge, payload minimisation). Deployed to staging `4b00b7f3`
+> and production `75e4c0c2`. Ops/GTM rows below remain operator-driven.
+
 ### Engineering
 
 | Week | Task | Notes |
@@ -159,6 +173,18 @@ flowchart LR
 ---
 
 ## Phase 4 — Focused expansion (Week 13+)
+
+**Engineering status (2026-10-20):** all six tracks shipped in change
+`phase-4-focused-expansion` — calendar feeds (ICS), reliability metrics +
+reviews + Established badge, trade/region catalog, monetization pilot
+agreements + booking-UI gate, flag-gated planner AI, multi-user provider
+accounts + CSV audit export (migration `0007`, deployed staging `d61fdc77` /
+production `a8e3a2ec`). Demand-gated tracks are **off by config**
+(`MONETIZATION_PILOT_ENABLED`, `PLANNER_AI_ENABLED`) and switch on when the
+mini-gates below are met — no redeploy. Calendar fetch is live
+(`CALENDAR_FETCH_ENABLED=true`); feeds only exist once staff register them.
+Owner follow-ups: add an Access bypass for `/u/*` (provider portal, same as
+`/e/`,`/t/`), and set `MTR_BADGES_ENABLED` remains pending TTJA confirmation.
 
 **Goal:** grow only what Gate 3 proved. Each item below gets its own mini-gate: hypothesis → success metric → decision date. Order follows expected demand, not developer enthusiasm.
 

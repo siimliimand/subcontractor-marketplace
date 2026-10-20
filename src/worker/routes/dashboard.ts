@@ -231,8 +231,7 @@ dashboardRouter.get("/supply", async (c) => {
   );
 });
 
-dashboardRouter.get("/effort", async (c) => {
-  const db = drizzle(c.env.DB);
+dashboardRouter.get("/effort", async (c) => {  const db = drizzle(c.env.DB);
 
   const perRequest = await db.all<{
     id: string;
@@ -289,5 +288,356 @@ dashboardRouter.get("/effort", async (c) => {
   return c.json({
     perRequest: perRequestRows,
     weekly: [...byWeek.values()].sort((a, b) => a.week.localeCompare(b.week)),
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 3: weekly pilot dashboard (docs/details/08).
+//
+// Bucketing: Monday-of-week (UTC) of the anchor timestamp. Cohort metrics
+// (success rate, conversion, time-to-response) bucket by the request's
+// approval week and are evaluated over the cohort's lifetime; activity
+// metrics (new requests, outreach, effort, failures) bucket by event week.
+// Every metric with an empty denominator is `null` — the UI renders "no
+// data", never 0%. Repeat usage groups by requests.pmName (free-text PM
+// identity — documented limitation until partners have accounts).
+// ---------------------------------------------------------------------------
+
+function weekStartIso(timestamp: string | null | undefined): string | null {
+  if (!timestamp) return null;
+  const d = new Date(timestamp);
+  if (Number.isNaN(d.getTime())) return null;
+  const day = (d.getUTCDay() + 6) % 7; // Mon = 0
+  const monday = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - day));
+  return monday.toISOString().slice(0, 10);
+}
+
+export type WeeklyRow = {
+  week: string;
+  newPms: number;
+  activePms: number;
+  newRequests: number;
+  completedRequests: number;
+  successRate: number | null;
+  medianHoursToFirstQualified: number | null;
+  providersContacted: number;
+  providersContactedPerRequest: number | null;
+  bookingConfirmed: number;
+  bookingConversion: number | null;
+  availabilityConfirmationRate: number | null;
+  failedCommitments: number;
+  repeatUsage: number | null;
+  manualMinutes: number;
+  manualEvents: number;
+  adoptionShare: number | null;
+};
+
+export async function computeWeeklyDashboard(
+  db: ReturnType<typeof drizzle>,
+  from: string,
+  to: string,
+): Promise<WeeklyRow[]> {
+  const requestResult = await db.all<{
+    id: string;
+    pmName: string | null;
+    status: string;
+    cancelledBy: string | null;
+    createdAt: string;
+    approvedAt: string | null;
+    firstQualifiedAt: string | null;
+    bookedAt: string | null;
+    outreachCount: number;
+  }>(sql`
+    SELECT r.id, r.pmName, r.status, r.cancelledBy, r.createdAt,
+      (SELECT occurredAt FROM audit_events e
+        WHERE e.entity = 'request' AND e.entityId = r.id AND e.action = 'request_approved'
+        ORDER BY e.occurredAt LIMIT 1) AS approvedAt,
+      (SELECT e.occurredAt FROM audit_events e
+        WHERE e.entity = 'request' AND e.entityId = r.id AND e.action = 'qualified_response'
+          AND e.channel = 'manual'
+        ORDER BY e.occurredAt LIMIT 1) AS firstQualifiedAt,
+      (SELECT e.occurredAt FROM audit_events e
+        WHERE e.entity = 'request' AND e.entityId = r.id AND e.action = 'booking_confirmed'
+        ORDER BY e.occurredAt LIMIT 1) AS bookedAt,
+      (SELECT COUNT(*) FROM outreach_entries o WHERE o.requestId = r.id) AS outreachCount
+    FROM requests r
+    WHERE r.createdAt >= ${from} AND r.createdAt <= ${to || "9999-12-31"}
+  `);
+  const requests = requestResult as unknown as Array<{
+    id: string;
+    pmName: string | null;
+    status: string;
+    cancelledBy: string | null;
+    createdAt: string;
+    approvedAt: string | null;
+    firstQualifiedAt: string | null;
+    bookedAt: string | null;
+    outreachCount: number;
+  }>;
+
+  // Business-hours helper (Europe/Tallinn) shared with the weekly median.
+  const tz = "Europe/Tallinn";
+  function businessHours(startIso: string, endIso: string): number {
+    const DAY_MS = 3_600_000 * 24;
+    let cursor = new Date(startIso);
+    const end = new Date(endIso);
+    let hours = 0;
+    while (cursor < end && hours < 24 * 30) {
+      const fmt = new Intl.DateTimeFormat("en-GB", {
+        timeZone: tz,
+        weekday: "short",
+        hour: "numeric",
+        hour12: false,
+      });
+      const parts = fmt.formatToParts(cursor);
+      const weekday = parts.find((p) => p.type === "weekday")?.value ?? "Mon";
+      const hour = Number(parts.find((p) => p.type === "hour")?.value ?? "0");
+      if (weekday !== "Sat" && weekday !== "Sun" && hour >= 9 && hour < 17) {
+        hours += 1 / 12;
+      }
+      cursor = new Date(cursor.getTime() + DAY_MS / (24 * 12));
+    }
+    return hours;
+  }
+
+  const [responseRows, outreachRows, failureRows, effortRows, declarationRows, activeProviderRows] =
+    await Promise.all([
+      db.all<{ receivedAt: string; type: string; workersCount: number | null }>(sql`
+        SELECT receivedAt, type, workersCount FROM responses
+        WHERE receivedAt >= ${from} AND receivedAt <= ${to || "9999-12-31"}
+      `),
+      db.all<{ sentAt: string | null }>(sql`
+        SELECT sentAt FROM outreach_entries
+        WHERE sentAt >= ${from} AND sentAt <= ${to || "9999-12-31"}
+      `),
+      db.all<{ occurredAt: string; action: string }>(sql`
+        SELECT occurredAt, action FROM audit_events
+        WHERE action IN ('accepted_but_not_delivered', 'booking_cancelled', 'booking_confirmed')
+          AND occurredAt >= ${from} AND occurredAt <= ${to || "9999-12-31"}
+      `),
+      db.all<{ createdAt: string; minutes: number }>(sql`
+        SELECT createdAt, minutes FROM time_entries
+        WHERE createdAt >= ${from} AND createdAt <= ${to || "9999-12-31"}
+      `),
+      db.all<{ channel: string; lastConfirmedAt: string }>(sql`
+        SELECT a.channel, a.lastConfirmedAt
+        FROM availability_declarations a
+      `),
+      db.all<{ n: number }>(sql`
+        SELECT COUNT(*) AS n FROM companies WHERE status = 'active'
+      `),
+    ]);
+
+  const responses = (responseRows as unknown as Array<{ receivedAt: string; type: string; workersCount: number | null }>).filter(
+    (r) => weekStartIso(r.receivedAt) !== null,
+  );
+  const outreachByWeek = new Map<string, number>();
+  for (const o of outreachRows as unknown as Array<{ sentAt: string | null }>) {
+    const w = weekStartIso(o.sentAt);
+    if (!w) continue;
+    outreachByWeek.set(w, (outreachByWeek.get(w) ?? 0) + 1);
+  }
+  const failuresByWeek = new Map<string, number>();
+  const confirmedByWeek = new Map<string, number>();
+  for (const e of failureRows as unknown as Array<{ occurredAt: string; action: string }>) {
+    const w = weekStartIso(e.occurredAt);
+    if (!w) continue;
+    if (e.action === "booking_confirmed") {
+      confirmedByWeek.set(w, (confirmedByWeek.get(w) ?? 0) + 1);
+    } else if (e.action === "accepted_but_not_delivered" || e.action === "booking_cancelled") {
+      failuresByWeek.set(w, (failuresByWeek.get(w) ?? 0) + 1);
+    }
+  }
+  const effortByWeek = new Map<string, { minutes: number; events: number }>();
+  for (const row of effortRows as unknown as Array<{ createdAt: string; minutes: number }>) {
+    const w = weekStartIso(row.createdAt);
+    if (!w) continue;
+    const entry = effortByWeek.get(w) ?? { minutes: 0, events: 0 };
+    entry.minutes += Number(row.minutes);
+    entry.events += 1;
+    effortByWeek.set(w, entry);
+  }
+
+  // Adoption share as-of a week end: booking_system declarations confirmed on
+  // or before that Sunday ÷ active providers (constant snapshot denominator).
+  const activeProviders = Number((activeProviderRows as unknown as Array<{ n: number }>)[0]?.n ?? 0);
+
+  // Collect the week range: every week that has any request, plus the range
+  // bounds, sorted.
+  const weekSet = new Set<string>();
+  for (const r of requests) {
+    for (const t of [r.createdAt, r.approvedAt, r.bookedAt]) {
+      const w = weekStartIso(t);
+      if (w) weekSet.add(w);
+    }
+  }
+  for (const w of [
+    ...outreachByWeek.keys(),
+    ...failuresByWeek.keys(),
+    ...confirmedByWeek.keys(),
+    ...effortByWeek.keys(),
+  ]) {
+    weekSet.add(w);
+  }
+  const fromWeek = weekStartIso(new Date(from).toISOString());
+  if (fromWeek) weekSet.add(fromWeek);
+  const weeks = [...weekSet].filter((w) => !to || w <= (to || "9999-12-31")).sort();
+
+  const rows: WeeklyRow[] = weeks.map((week) => {
+    const weekEndDate = new Date(`${week}T00:00:00Z`);
+    weekEndDate.setUTCDate(weekEndDate.getUTCDate() + 7); // exclusive end
+
+    // Activity (event-week buckets)
+    const newRequests = requests.filter(
+      (r) => weekStartIso(r.createdAt) === week,
+    );
+    const newPms = new Set(
+      newRequests.map((r) => r.pmName).filter((p): p is string => !!p),
+    );
+    const cohortApproved = requests.filter(
+      (r) => weekStartIso(r.approvedAt) === week,
+    );
+    const successDenominator = cohortApproved.filter(
+      (r) => !(r.status === "cancelled" && r.cancelledBy === "customer"),
+    );
+    const qualifiedIn24h = successDenominator.filter((r) => {
+      if (!r.approvedAt || !r.firstQualifiedAt) return false;
+      return (
+        (new Date(r.firstQualifiedAt).getTime() - new Date(r.approvedAt).getTime()) / 3_600_000 <=
+        24
+      );
+    });
+    const responseHours = successDenominator
+      .filter((r) => r.approvedAt && r.firstQualifiedAt)
+      .map((r) => businessHours(r.approvedAt!, r.firstQualifiedAt!))
+      .sort((a, b) => a - b);
+    const median =
+      responseHours.length === 0
+        ? null
+        : responseHours.length % 2 === 1
+          ? responseHours[(responseHours.length - 1) / 2]!
+          : (responseHours[responseHours.length / 2 - 1]! + responseHours[responseHours.length / 2]!) / 2;
+
+    // Conversion + completion: cohort semantics over the approved-in-week set.
+    const cohortDecided = cohortApproved.filter((r) =>
+      ["booked", "closed"].includes(r.status),
+    );
+    const cohortBooked = cohortApproved.filter((r) => r.bookedAt !== null);
+
+    const contacted = outreachByWeek.get(week) ?? 0;
+
+    // Availability confirmation (response-week bucket): responses declaring
+    // workers ÷ all responses minus provider declines.
+    const weekResponses = responses.filter(
+      (r) => weekStartIso(r.receivedAt) === week,
+    );
+    const availabilityDenominator = weekResponses.filter((r) => r.type !== "decline");
+    const availabilityNumerator = availabilityDenominator.filter(
+      (r) => (r.workersCount ?? 0) > 0,
+    );
+
+    // Repeat usage (cumulative through end of week): PMs with ≥2 requests ÷ PMs active.
+    const pmsToDate = new Map<string, number>();
+    for (const r of requests) {
+      if (!r.pmName || !r.createdAt || new Date(r.createdAt) > weekEndDate) continue;
+      pmsToDate.set(r.pmName, (pmsToDate.get(r.pmName) ?? 0) + 1);
+    }
+    const activePms = pmsToDate.size;
+    const repeatPms = [...pmsToDate.values()].filter((n) => n >= 2).length;
+
+    // Adoption share as-of week end.
+    const bsDeclarations = declarationRows.filter(
+      (d) =>
+        d.channel === "booking_system" &&
+        weekStartIso(d.lastConfirmedAt) !== null &&
+        new Date(d.lastConfirmedAt) <= weekEndDate,
+    ).length;
+
+    const effort = effortByWeek.get(week) ?? { minutes: 0, events: 0 };
+
+    return {
+      week,
+      newPms: newPms.size,
+      activePms,
+      newRequests: newRequests.length,
+      completedRequests: cohortBooked.length,
+      successRate:
+        successDenominator.length === 0 ? null : qualifiedIn24h.length / successDenominator.length,
+      medianHoursToFirstQualified: median,
+      providersContacted: contacted,
+      providersContactedPerRequest:
+        newRequests.length === 0 ? null : contacted / newRequests.length,
+      bookingConfirmed: confirmedByWeek.get(week) ?? 0,
+      bookingConversion:
+        cohortDecided.length === 0 ? null : cohortBooked.length / cohortDecided.length,
+      availabilityConfirmationRate:
+        availabilityDenominator.length === 0
+          ? null
+          : availabilityNumerator.length / availabilityDenominator.length,
+      failedCommitments: failuresByWeek.get(week) ?? 0,
+      repeatUsage: activePms === 0 ? null : repeatPms / activePms,
+      manualMinutes: Number(effort.minutes),
+      manualEvents: Number(effort.events),
+      adoptionShare: activeProviders === 0 ? null : bsDeclarations / activeProviders,
+    };
+  });
+
+  return rows;
+}
+
+dashboardRouter.get("/weekly", async (c) => {
+  const db = drizzle(c.env.DB);
+  const to = c.req.query("to") ?? new Date().toISOString().slice(0, 10);
+  const from =
+    c.req.query("from") ??
+    new Date(Date.now() - 8 * 7 * 24 * 3_600_000).toISOString().slice(0, 10);
+  const rows = await computeWeeklyDashboard(db, from, to);
+  return c.json({ from, to, weeks: rows });
+});
+
+const WEEKLY_COLUMNS: { key: keyof WeeklyRow; label: string }[] = [
+  { key: "newPms", label: "new_pms" },
+  { key: "activePms", label: "active_pms" },
+  { key: "newRequests", label: "new_requests" },
+  { key: "completedRequests", label: "completed_requests" },
+  { key: "successRate", label: "success_rate" },
+  { key: "medianHoursToFirstQualified", label: "median_hours_to_first_qualified" },
+  { key: "providersContacted", label: "providers_contacted" },
+  { key: "providersContactedPerRequest", label: "providers_contacted_per_request" },
+  { key: "bookingConfirmed", label: "booking_confirmed" },
+  { key: "bookingConversion", label: "booking_conversion" },
+  { key: "availabilityConfirmationRate", label: "availability_confirmation_rate" },
+  { key: "failedCommitments", label: "failed_commitments" },
+  { key: "repeatUsage", label: "repeat_usage" },
+  { key: "manualMinutes", label: "manual_minutes" },
+  { key: "manualEvents", label: "manual_events" },
+  { key: "adoptionShare", label: "adoption_share" },
+];
+
+/** CSV export for the Monday metrics review — one row per week, no data = empty cell. */
+dashboardRouter.get("/export.csv", async (c) => {
+  const db = drizzle(c.env.DB);
+  const to = c.req.query("to") ?? new Date().toISOString().slice(0, 10);
+  const from =
+    c.req.query("from") ??
+    new Date(Date.now() - 8 * 7 * 24 * 3_600_000).toISOString().slice(0, 10);
+  const rows = await computeWeeklyDashboard(db, from, to);
+
+  const header = ["week", ...WEEKLY_COLUMNS.map((col) => col.label)].join(",");
+  const lines = rows.map((row) =>
+    [
+      row.week,
+      ...WEEKLY_COLUMNS.map((col) => {
+        const value = row[col.key];
+        return value === null || value === undefined ? "" : String(value);
+      }),
+    ].join(","),
+  );
+  const csv = `${header}\n${lines.join("\n")}\n`;
+  return new Response(csv, {
+    headers: {
+      "Content-Type": "text/csv; charset=utf-8",
+      "Content-Disposition": `attachment; filename="weekly-dashboard-${to}.csv"`,
+    },
   });
 });

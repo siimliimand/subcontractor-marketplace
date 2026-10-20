@@ -26,7 +26,12 @@ export type Service = {
   createdAt: string;
 };
 
-export const TRADES = ["electrical", "plumbing", "hvac", "drywall", "flooring", "painting"];
+/**
+ * Phase 4: the UI trade list is catalog-driven — the cockpit fetches
+ * `/api/catalog` and falls back to the pilot six when unavailable.
+ */
+export const FALLBACK_TRADES = ["electrical", "plumbing", "hvac", "drywall", "flooring", "painting"];
+export const TRADES = FALLBACK_TRADES;
 export const PRICING_MODELS = ["hour", "m2", "project"];
 export const PROVIDER_STATUSES = ["active", "inactive", "opted_out"];
 export const REQUEST_STATUSES = [
