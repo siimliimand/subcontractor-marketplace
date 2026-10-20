@@ -31,6 +31,7 @@ export async function sendOutreachWithStub(params: {
   providerIds: string[];
   staffUserId: string;
   staffEmail: string;
+  appBaseUrl?: string;
 }): Promise<{ outcome: EmailSendOutcome; sent: StubEmailMessage[] }> {
   const { stubEnv, sent } = stubSendEnv();
   const outcome = await sendOutreachEmailBatch(stubEnv, params);
