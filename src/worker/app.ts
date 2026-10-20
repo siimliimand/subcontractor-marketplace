@@ -3,9 +3,12 @@ import { requireStaff, type AccessUser } from "./auth";
 import { providersRouter } from "./routes/providers";
 import { requestsRouter } from "./routes/requests";
 import { outreachRouter } from "./routes/outreach";
+import { matchingRouter } from "./routes/matching";
+import { bookingRouter } from "./routes/bookingRequests";
 import { emailOutreachRouter } from "./routes/emailOutreach";
 import { effortRouter } from "./routes/effort";
 import { dashboardRouter } from "./routes/dashboard";
+import { briefsRouter } from "./routes/briefs";
 
 export type Bindings = {
   DB: D1Database;
@@ -21,6 +24,12 @@ export type Bindings = {
   EMAIL_REPLY_TO?: string;
   EMAIL_DAILY_LIMIT?: string;
   EMAIL_TOKEN_TTL_SECONDS?: string;
+  // Phase 2: 48-hour holds feature flag ("true" enables hold routes).
+  BOOKING_HOLDS_ENABLED?: string;
+  // Phase 2: Workers AI binding for the brief builder.
+  AI?: {
+    run(model: string, inputs: unknown): Promise<unknown>;
+  };
 };
 
 export type AppEnv = { Bindings: Bindings; Variables: { user: AccessUser } };
@@ -37,6 +46,9 @@ export function createApp() {
   app.route("/api/providers", providersRouter);
   app.route("/api/requests", requestsRouter);
   app.route("/api", outreachRouter);
+  app.route("/api", matchingRouter);
+  app.route("/api", bookingRouter);
+  app.route("/api", briefsRouter);
   app.route("/api", emailOutreachRouter);
   app.route("/api", effortRouter);
   app.route("/api/dashboard", dashboardRouter);

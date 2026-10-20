@@ -4,12 +4,182 @@ import { get, post } from "../api";
 import { REQUEST_STATUSES, TRADES, statusBadge } from "../types";
 import type { RequestRow } from "../requestTypes";
 
+type BriefDraft = Record<string, string | string[] | null>;
+
+type BriefDraftResult = {
+  id: string;
+  draft: BriefDraft;
+  missing: string[];
+  state: string;
+};
+
+const BRIEF_FIELD_LABELS: Record<string, string> = {
+  workType: "Work type",
+  scope: "Scope",
+  location: "Location",
+  startDate: "Start date",
+  duration: "Duration",
+  trades: "Trades",
+  crewSize: "Crew size",
+  budgetExpectations: "Budget expectations",
+  materialsResponsibility: "Materials responsibility",
+  siteConditions: "Site conditions",
+};
+
+function BriefDraftPanel({
+  onApproved,
+}: {
+  onApproved: (final: BriefDraft) => void;
+}) {
+  const [sourceText, setSourceText] = useState("");
+  const [draft, setDraft] = useState<BriefDraftResult | null>(null);
+  const [final, setFinal] = useState<BriefDraft | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function runDraft() {
+    if (busy || sourceText.trim().length < 10) return;
+    setBusy(true);
+    setError(null);
+    setDraft(null);
+    setFinal(null);
+    try {
+      const res = await fetch("/api/briefs/draft", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sourceText }),
+      });
+      const body = (await res.json()) as BriefDraftResult & { error?: string };
+      if (!res.ok) {
+        setError(String(body.error ?? `draft failed (${res.status})`));
+      } else {
+        setDraft(body);
+        setFinal({ ...body.draft });
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function approve() {
+    if (busy || !draft || !final) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/briefs/${draft.id}/approve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ final }),
+      });
+      const body = (await res.json()) as { error?: string };
+      if (!res.ok) {
+        setError(String(body.error ?? `approve failed (${res.status})`));
+      } else {
+        onApproved(final);
+        setDraft(null);
+        setFinal(null);
+        setSourceText("");
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="bg-white p-4 rounded border space-y-3">
+      <h3 className="text-sm font-semibold">AI brief builder (optional)</h3>
+      <textarea
+        value={sourceText}
+        onChange={(e) => setSourceText(e.target.value)}
+        placeholder="Describe the job in plain words, e.g. “we need an electrical subcontractor for an apartment renovation in Tallinn next month, 3 fitters”"
+        className="w-full border rounded p-2 text-sm"
+        rows={3}
+      />
+      <button
+        type="button"
+        onClick={runDraft}
+        disabled={busy || sourceText.trim().length < 10}
+        className="bg-gray-700 text-white px-3 py-1.5 rounded text-sm disabled:opacity-50"
+      >
+        Draft structured brief
+      </button>
+      {error && <p className="text-sm text-red-600">{error}</p>}
+      {draft && final && (
+        <div className="border rounded p-3 text-sm space-y-2">
+          <p className="font-medium">Proposed brief — gaps flagged, never invented:</p>
+          <div className="grid grid-cols-2 gap-2">
+            {Object.keys(draft.draft).map((k) => {
+              const wasMissing = draft.missing.includes(k);
+              const value = final[k] ?? "";
+              const stringValue = Array.isArray(value) ? value.join(", ") : value;
+              return (
+                <label key={k} className={wasMissing ? "text-amber-700" : ""}>
+                  <span className="text-xs">
+                    {BRIEF_FIELD_LABELS[k] ?? k}
+                    {wasMissing ? " · was missing" : ""}
+                  </span>
+                  <input
+                    value={stringValue}
+                    onChange={(e) =>
+                      setFinal({ ...final, [k]: k === "trades" ? e.target.value.split(",").map((s) => s.trim()) : e.target.value })
+                    }
+                    className={`mt-0.5 w-full border rounded p-1.5 ${wasMissing ? "border-amber-400" : ""}`}
+                  />
+                </label>
+              );
+            })}
+          </div>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={approve}
+              disabled={busy}
+              className="bg-green-600 text-white px-3 py-1.5 rounded text-sm disabled:opacity-50"
+            >
+              Approve &amp; pre-fill form
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setDraft(null);
+                setFinal(null);
+              }}
+              className="text-gray-600 hover:underline text-sm"
+            >
+              Discard draft
+            </button>
+          </div>
+          <p className="text-xs text-gray-400">
+            Nothing is created or sent until you approve. The original proposal is stored alongside
+            your approved edits.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Requests() {
   const [requests, setRequests] = useState<RequestRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [filters, setFilters] = useState({ status: "", trade: "" });
+  // Multi-trade (Decision 3): checked trades form the required set; the
+  // selected primary goes first in the payload.
+  const [selectedTrades, setSelectedTrades] = useState<string[]>([]);
+  const [primaryTrade, setPrimaryTrade] = useState<string>("");
+  // AI brief builder prefill (only applied when the user approves a draft).
+  const [prefill, setPrefill] = useState<Record<string, string>>({});
+
+  function toggleTrade(t: string) {
+    setSelectedTrades((prev) => {
+      const next = prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t];
+      if (primaryTrade && !next.includes(primaryTrade)) setPrimaryTrade(next[0] ?? "");
+      if (!primaryTrade && next.length) setPrimaryTrade(next[0]!);
+      return next;
+    });
+  }
 
   async function load() {
     const params = new URLSearchParams(
@@ -30,14 +200,23 @@ export default function Requests() {
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (submitting) return;
+    if (selectedTrades.length === 0) {
+      setError("Select at least one trade");
+      return;
+    }
     setSubmitting(true);
     const data = Object.fromEntries(new FormData(e.currentTarget));
+    const trades = [primaryTrade || selectedTrades[0], ...selectedTrades.filter((t) => t !== (primaryTrade || selectedTrades[0]))];
     try {
       await post("/requests", {
         ...data,
+        trade: undefined,
+        trades,
         crewSize: Number(data.crewSize),
       });
       setShowForm(false);
+      setSelectedTrades([]);
+      setPrimaryTrade("");
       await load();
     } catch (err) {
       setError(String(err));
@@ -61,11 +240,33 @@ export default function Requests() {
       {error && <div className="mb-4 text-sm text-red-600 bg-red-50 p-2 rounded">{error}</div>}
 
       {showForm && (
-        <form onSubmit={submit} className="mb-6 bg-white p-4 rounded border space-y-3">
+        <div className="mb-6 space-y-3">
+          <BriefDraftPanel
+            onApproved={(approved) => {
+              const asStrings: Record<string, string> = {};
+              for (const [k, v] of Object.entries(approved)) {
+                if (typeof v === "string") asStrings[k] = v;
+              }
+              setPrefill(asStrings);
+              const trades = Array.isArray(approved.trades)
+                ? approved.trades.filter((t): t is string => !!t && TRADES.includes(t as never))
+                : [];
+              if (trades.length) {
+                setSelectedTrades(trades);
+                setPrimaryTrade(trades[0]!);
+              }
+            }}
+          />
+          <form onSubmit={submit} className="bg-white p-4 rounded border space-y-3">
           <div className="grid grid-cols-2 gap-3">
             <label className="text-sm">
               Title *
-              <input name="title" required className="mt-1 w-full border rounded p-1.5" />
+              <input
+                name="title"
+                required
+                defaultValue={prefill.workType ?? ""}
+                className="mt-1 w-full border rounded p-1.5"
+              />
             </label>
             <label className="text-sm">
               On behalf of PM
@@ -73,28 +274,60 @@ export default function Requests() {
             </label>
             <label className="text-sm col-span-2">
               Work description *
-              <textarea name="description" required className="mt-1 w-full border rounded p-1.5" />
+              <textarea
+                name="description"
+                required
+                defaultValue={prefill.scope ?? ""}
+                className="mt-1 w-full border rounded p-1.5"
+              />
             </label>
             <label className="text-sm">
               Location *
-              <input name="location" required className="mt-1 w-full border rounded p-1.5" />
+              <input
+                name="location"
+                required
+                defaultValue={prefill.location ?? ""}
+                className="mt-1 w-full border rounded p-1.5"
+              />
             </label>
-            <label className="text-sm">
-              Trade *
-              <select name="trade" required className="mt-1 w-full border rounded p-1.5">
+            <div className="text-sm">
+              <span className="block">Trades * (select all that apply)</span>
+              <div className="mt-1 flex flex-wrap gap-3">
                 {TRADES.map((t) => (
-                  <option key={t} value={t}>
+                  <label key={t} className="flex items-center gap-1">
+                    <input
+                      type="checkbox"
+                      checked={selectedTrades.includes(t)}
+                      onChange={() => toggleTrade(t)}
+                    />
                     {t}
-                  </option>
+                  </label>
                 ))}
-              </select>
-            </label>
+              </div>
+              {selectedTrades.length > 1 && (
+                <label className="block mt-2">
+                  Primary trade
+                  <select
+                    value={primaryTrade}
+                    onChange={(e) => setPrimaryTrade(e.target.value)}
+                    className="mt-1 w-full border rounded p-1.5"
+                  >
+                    {selectedTrades.map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </div>
             <label className="text-sm">
               Desired start date *
               <input
                 name="startDate"
                 type="date"
                 required
+                defaultValue={prefill.startDate ?? ""}
                 className="mt-1 w-full border rounded p-1.5"
               />
             </label>
@@ -105,20 +338,33 @@ export default function Requests() {
                 type="number"
                 min="1"
                 required
+                defaultValue={prefill.crewSize ?? ""}
                 className="mt-1 w-full border rounded p-1.5"
               />
             </label>
             <label className="text-sm">
               Budget
-              <input name="budget" className="mt-1 w-full border rounded p-1.5" />
+              <input
+                name="budget"
+                defaultValue={prefill.budgetExpectations ?? ""}
+                className="mt-1 w-full border rounded p-1.5"
+              />
             </label>
             <label className="text-sm">
               Duration
-              <input name="duration" className="mt-1 w-full border rounded p-1.5" />
+              <input
+                name="duration"
+                defaultValue={prefill.duration ?? ""}
+                className="mt-1 w-full border rounded p-1.5"
+              />
             </label>
             <label className="text-sm">
               Notes
-              <input name="notes" className="mt-1 w-full border rounded p-1.5" />
+              <input
+                name="notes"
+                defaultValue={prefill.siteConditions ?? ""}
+                className="mt-1 w-full border rounded p-1.5"
+              />
             </label>
           </div>
           <button
@@ -127,7 +373,8 @@ export default function Requests() {
           >
             Create draft request
           </button>
-        </form>
+          </form>
+        </div>
       )}
 
       <div className="mb-4 flex gap-3 text-sm">

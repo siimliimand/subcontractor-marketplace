@@ -1,7 +1,17 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { SELF, env } from "cloudflare:test";
 import { makeAccessToken, accessHeaders } from "./helpers/access";
-import { auditEvents, bookings, companies, requests, responses, users } from "../src/worker/db/schema";
+import {
+  auditEvents,
+  bookingRequests,
+  bookings,
+  companies,
+  holds,
+  requests,
+  requestTrades,
+  responses,
+  users,
+} from "../src/worker/db/schema";
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
 
@@ -18,6 +28,8 @@ beforeEach(async () => {
   const me = (await res.json()) as { id: string };
   userId = me.id;
   await db().delete(auditEvents);
+  await db().delete(bookingRequests);
+  await db().delete(holds);
   await db().delete(bookings);
   await db().delete(responses);
   await db().delete(requests);
@@ -407,5 +419,117 @@ describe("event atomicity", () => {
     expect(final.length).toBe(after.length);
     const reqRows = await db().select().from(requests);
     expect(reqRows).toHaveLength(0);
+  });
+});
+
+describe("multi-trade requests (phase 2)", () => {
+  it("creates a two-trade request: primary first, set stored in request_trades", async () => {
+    const { res, body } = await createRequest({
+      trade: undefined,
+      trades: ["electrical", "drywall"],
+    });
+    expect(res.status).toBe(201);
+    expect(body.trade).toBe("electrical");
+    expect(body.trades).toEqual(["electrical", "drywall"]);
+
+    const rows = await db()
+      .select()
+      .from(requestTrades)
+      .where(eq(requestTrades.requestId, body.id as string));
+    expect(rows).toHaveLength(2);
+    expect(rows.find((r) => r.trade === "electrical")!.isPrimary).toBe(1);
+    expect(rows.find((r) => r.trade === "drywall")!.isPrimary).toBe(0);
+
+    // detail returns the labelled set
+    const detail = await SELF.fetch(`https://example.com/api/requests/${body.id}`, {
+      headers: authHeaders,
+    });
+    const detailBody = (await detail.json()) as { trades: { trade: string; isPrimary: boolean }[] };
+    expect(detailBody.trades).toEqual([
+      { trade: "electrical", isPrimary: true },
+      { trade: "drywall", isPrimary: false },
+    ]);
+  });
+
+  it("rejects an empty trades set", async () => {
+    const { res, body } = await createRequest({ trade: undefined, trades: [] });
+    expect(res.status).toBe(400);
+    expect(body.error).toBe("at_least_one_trade_required");
+    const rows = await db().select().from(requests);
+    expect(rows).toHaveLength(0);
+  });
+
+  it("rejects invalid trades entries", async () => {
+    const { res, body } = await createRequest({ trade: undefined, trades: ["electrical", "welding"] });
+    expect(res.status).toBe(400);
+    expect(String(body.error)).toContain("invalid_trade");
+  });
+
+  it("keeps the legacy single-trade payload working", async () => {
+    const { res, body } = await createRequest();
+    expect(res.status).toBe(201);
+    expect(body.trades).toEqual(["electrical"]);
+    const rows = await db()
+      .select()
+      .from(requestTrades)
+      .where(eq(requestTrades.requestId, body.id as string));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.isPrimary).toBe(1);
+  });
+
+  it("replaces the trades set on patch of a draft", async () => {
+    const { body } = await createRequest({
+      trade: undefined,
+      trades: ["electrical", "drywall"],
+    });
+    const id = body.id as string;
+    const patched = await SELF.fetch(`https://example.com/api/requests/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...authHeaders },
+      body: JSON.stringify({ trades: ["painting"] }),
+    });
+    expect(patched.status).toBe(200);
+    const patchedBody = (await patched.json()) as Record<string, unknown>;
+    expect(patchedBody.trade).toBe("painting");
+
+    const rows = await db().select().from(requestTrades).where(eq(requestTrades.requestId, id));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.trade).toBe("painting");
+    expect(rows[0]!.isPrimary).toBe(1);
+  });
+
+  it("approves a two-trade request and records request_approved", async () => {
+    const { body } = await createRequest({
+      trade: undefined,
+      trades: ["electrical", "drywall"],
+    });
+    const id = body.id as string;
+    const res = await transition(id, "approved");
+    expect(res.status).toBe(200);
+    const events = await db()
+      .select()
+      .from(auditEvents)
+      .where(eq(auditEvents.action, "request_approved"));
+    expect(events).toHaveLength(1);
+  });
+
+  it("list trade filter matches any trade in the required-trades set", async () => {
+    const { body } = await createRequest({
+      trade: undefined,
+      trades: ["electrical", "drywall"],
+    });
+    expect(body.id).toBeTruthy();
+    await createRequest(); // single-trade electrical, different id
+
+    const drywall = await SELF.fetch("https://example.com/api/requests?trade=drywall", {
+      headers: authHeaders,
+    }).then((r) => r.json() as Promise<{ id: unknown }[]>);
+    expect(drywall).toHaveLength(1);
+    expect(drywall[0]!.id).toBe(body.id);
+
+    const electrical = await SELF.fetch("https://example.com/api/requests?trade=electrical", {
+      headers: authHeaders,
+    }).then((r) => r.json() as Promise<unknown[]>);
+    expect(electrical).toHaveLength(2);
   });
 });

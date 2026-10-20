@@ -19,13 +19,62 @@ export type RequestRow = {
   updatedAt: string;
 };
 
+export type ComparisonEntry = {
+  responseId: string;
+  companyId: string;
+  legalName: string;
+  type: string;
+  workersCount: number | null;
+  availableFrom: string | null;
+  reason: string | null;
+  receivedAt: string | null;
+  availability: { label: string; confirmedWorkers: number };
+};
+
+export type ComparisonGroup = {
+  trade: string;
+  isPrimary: boolean;
+  entries: ComparisonEntry[];
+};
+
 export type RequestDetailData = {
   request: RequestRow;
+  trades: { trade: string; isPrimary: boolean }[];
   responses: { response: ResponseRow; provider: Company | null }[];
   bookings: { booking: BookingRow; provider: Company | null }[];
+  bookingRequests: { br: BookingRequestRow; provider: Company | null }[];
+  holds: HoldRow[];
+  comparison: ComparisonGroup[];
   outreach: { entry: OutreachRow; provider: Company | null }[];
   timeEntries: TimeEntryRow[];
   events: AuditEventRow[];
+};
+
+export type BookingRequestRow = {
+  id: string;
+  requestId: string;
+  responseId: string | null;
+  holdId: string | null;
+  companyId: string;
+  trade: string;
+  startDate: string;
+  endDate: string;
+  workersCount: number;
+  state: string;
+  createdAt: string;
+};
+
+export type HoldRow = {
+  id: string;
+  requestId: string;
+  companyId: string;
+  trade: string;
+  startDate: string;
+  endDate: string;
+  workersCount: number;
+  state: string;
+  expiresAt: string;
+  createdAt: string;
 };
 
 export type ResponseRow = {

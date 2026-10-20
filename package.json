@@ -12,8 +12,8 @@
     "deploy:staging": "npm run build && wrangler deploy -e staging",
     "deploy:production": "npm run build && wrangler deploy -e production",
     "db:generate": "drizzle-kit generate",
-    "db:migrate:staging": "wrangler d1 migrations apply cockpit-staging -e staging",
-    "db:migrate:production": "wrangler d1 migrations apply cockpit-production -e production",
+    "db:migrate:staging": "wrangler d1 migrations apply cockpit-staging -e staging --remote",
+    "db:migrate:production": "wrangler d1 migrations apply cockpit-production -e production --remote",
     "db:migrate:local": "wrangler d1 migrations apply cockpit-local --local",
     "typecheck": "tsc --noEmit"
   },

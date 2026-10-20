@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, uniqueIndex, index } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, real, uniqueIndex, index } from "drizzle-orm/sqlite-core";
 
 const uuid = () => text().$defaultFn(() => crypto.randomUUID());
 
@@ -85,6 +85,54 @@ export const requests = sqliteTable(
   }),
 );
 
+/**
+ * Multi-trade requests (Decision 3): the required-trades set. `requests.trade`
+ * stays NOT NULL as the primary trade; this relation carries the full set.
+ */
+export const requestTrades = sqliteTable(
+  "request_trades",
+  {
+    id: uuid().primaryKey(),
+    requestId: text()
+      .notNull()
+      .references(() => requests.id, { onDelete: "cascade" }),
+    trade: text().notNull(),
+    isPrimary: integer().notNull().default(0),
+  },
+  (t) => ({
+    idx0: uniqueIndex("request_trades_request_trade_unique").on(t.requestId, t.trade),
+    idx1: index("request_trades_trade_idx").on(t.trade),
+  }),
+);
+
+export const AVAILABILITY_CHANNELS = ["booking_system", "email_only"] as const;
+
+export type AvailabilityChannel = (typeof AVAILABILITY_CHANNELS)[number];
+
+/** Capacity model: people per trade per day, freshness keyed off lastConfirmedAt. */
+export const availabilityDeclarations = sqliteTable(
+  "availability_declarations",
+  {
+    id: uuid().primaryKey(),
+    companyId: text()
+      .notNull()
+      .references(() => companies.id, { onDelete: "cascade" }),
+    trade: text().notNull(),
+    workersCount: integer().notNull(),
+    dateFrom: text().notNull(),
+    dateTo: text().notNull(),
+    channel: text().notNull().default("booking_system"),
+    lastConfirmedAt: text().notNull(),
+    notes: text(),
+    createdBy: text().references(() => users.id),
+    createdAt: nowIso(),
+  },
+  (t) => ({
+    idx0: index("availability_company_trade_idx").on(t.companyId, t.trade),
+    idx1: index("availability_confirmed_idx").on(t.lastConfirmedAt),
+  }),
+);
+
 export const responses = sqliteTable(
   "responses",
   {
@@ -121,6 +169,10 @@ export const bookings = sqliteTable(
     companyId: text()
       .notNull()
       .references(() => companies.id),
+    // Phase 2: required for first-confirmed-wins capacity checks (per-trade).
+    // Legacy rows created before this column exist carry the DEFAULT '' value;
+    // the app always sets a real trade on new bookings.
+    trade: text().notNull().default(""),
     startDate: text().notNull(),
     endDate: text().notNull(),
     workersCount: integer().notNull(),
@@ -134,6 +186,7 @@ export const bookings = sqliteTable(
   },
   (t) => ({
     idx0: index("bookings_company_idx").on(t.companyId),
+    idx1: index("bookings_company_trade_idx").on(t.companyId, t.trade),
   }),
 );
 
@@ -156,6 +209,11 @@ export const outreachEntries = sqliteTable(
       .notNull()
       .references(() => users.id),
     channel: text().notNull().default("manual"),
+    // Phase 2: matching-generated entries record the trade they target and the
+    // transparent ranking breakdown that selected this candidate.
+    trade: text(),
+    matchScore: real(),
+    matchFactorsJson: text(),
     emailStatus: text(),
     emailSkippedReason: text(),
     sentAt: nowIso(),
@@ -235,5 +293,110 @@ export const timeEntries = sqliteTable(
   },
   (t) => ({
     idx0: index("time_entries_request_idx").on(t.requestId),
+  }),
+);
+
+export const BOOKING_REQUEST_STATES = ["requested", "confirmed", "withdrawn"] as const;
+
+export type BookingRequestState = (typeof BOOKING_REQUEST_STATES)[number];
+
+/**
+ * Phase 2 booking flow: a booking request (recording intent) precedes the
+ * explicit confirmation that inserts the `bookings` row. Only a confirmation
+ * sets the request status to `booked`.
+ */
+export const bookingRequests = sqliteTable(
+  "booking_requests",
+  {
+    id: uuid().primaryKey(),
+    requestId: text()
+      .notNull()
+      .references(() => requests.id, { onDelete: "cascade" }),
+    responseId: text().references(() => responses.id),
+    holdId: text(),
+    companyId: text()
+      .notNull()
+      .references(() => companies.id),
+    trade: text().notNull(),
+    startDate: text().notNull(),
+    endDate: text().notNull(),
+    workersCount: integer().notNull(),
+    state: text().notNull().default("requested"),
+    requestedBy: text()
+      .notNull()
+      .references(() => users.id),
+    confirmedBy: text().references(() => users.id),
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+  },
+  (t) => ({
+    idx0: index("booking_requests_request_idx").on(t.requestId),
+  }),
+);
+
+export const HOLD_STATES = ["active", "expired", "superseded", "released"] as const;
+
+export type HoldState = (typeof HOLD_STATES)[number];
+
+export const HOLD_TTL_MS = 48 * 60 * 60 * 1000;
+
+/**
+ * Advisory 48-hour holds on provider capacity. Expiry is lazy: readers and
+ * writers first flip active holds past `expiresAt` to `expired` in the same
+ * batch, so no cron is needed.
+ */
+export const holds = sqliteTable(
+  "holds",
+  {
+    id: uuid().primaryKey(),
+    requestId: text()
+      .notNull()
+      .references(() => requests.id, { onDelete: "cascade" }),
+    companyId: text()
+      .notNull()
+      .references(() => companies.id),
+    trade: text().notNull(),
+    startDate: text().notNull(),
+    endDate: text().notNull(),
+    workersCount: integer().notNull(),
+    state: text().notNull().default("active"),
+    releasedReason: text(),
+    expiresAt: text().notNull(),
+    createdBy: text()
+      .notNull()
+      .references(() => users.id),
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+  },
+  (t) => ({
+    idx0: index("holds_company_trade_idx").on(t.companyId, t.trade),
+    idx1: index("holds_request_idx").on(t.requestId),
+  }),
+);
+
+/**
+ * AI brief builder (phase 2): the model's proposal and the approved final are
+ * both stored so the PM-edit delta stays auditable. Unapproved drafts are
+ * inert — they never create requests or outreach.
+ */
+export const briefProposals = sqliteTable(
+  "brief_proposals",
+  {
+    id: uuid().primaryKey(),
+    requestId: text().references(() => requests.id, { onDelete: "set null" }),
+    sourceText: text().notNull(),
+    proposedJson: text().notNull(),
+    missingFields: text(),
+    finalJson: text(),
+    model: text().notNull(),
+    state: text().notNull().default("drafted"),
+    createdBy: text()
+      .notNull()
+      .references(() => users.id),
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+  },
+  (t) => ({
+    idx0: index("brief_proposals_request_idx").on(t.requestId),
   }),
 );

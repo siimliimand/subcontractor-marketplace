@@ -2,10 +2,34 @@ import { FormEvent, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { get, patch, post } from "../api";
 import { Company, PROVIDER_STATUSES, PRICING_MODELS, TRADES, statusBadge } from "../types";
+import { availabilityLabel } from "../availabilityLabel";
+
+type Declaration = {
+  id: string;
+  trade: string;
+  workersCount: number;
+  dateFrom: string;
+  dateTo: string;
+  channel: string;
+  lastConfirmedAt: string;
+  freshness: string;
+};
+
+type AvailabilityData = {
+  declarations: Declaration[];
+  summary: { confirmedWorkers: number; hasFreshDeclarations: boolean };
+};
+
+const toneClass: Record<string, string> = {
+  confirmed: "bg-green-100 text-green-800",
+  reconfirm: "bg-yellow-100 text-yellow-800",
+  unconfirmed: "bg-gray-200 text-gray-700",
+};
 
 export default function ProviderDetail() {
   const { id } = useParams<{ id: string }>();
   const [provider, setProvider] = useState<Company | null>(null);
+  const [availability, setAvailability] = useState<AvailabilityData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
 
@@ -13,6 +37,7 @@ export default function ProviderDetail() {
     if (!id) return;
     try {
       setProvider(await get<Company>(`/providers/${id}`));
+      setAvailability(await get<AvailabilityData>(`/providers/${id}/availability`));
       setError(null);
     } catch (e) {
       setError(String(e));
@@ -66,6 +91,22 @@ export default function ProviderDetail() {
     const data = Object.fromEntries(new FormData(e.currentTarget));
     try {
       await patch(`/providers/${id}/services/${serviceId}`, data);
+      await load();
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  async function addDeclaration(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!id) return;
+    const data = Object.fromEntries(new FormData(e.currentTarget));
+    try {
+      await post(`/providers/${id}/availability`, {
+        ...data,
+        workersCount: Number((data as Record<string, string>).workersCount),
+      });
+      (e.target as HTMLFormElement).reset();
       await load();
     } catch (err) {
       setError(String(err));
@@ -241,6 +282,73 @@ export default function ProviderDetail() {
             </div>
             <button className="bg-blue-600 text-white px-3 py-1.5 rounded text-sm">
               Add service
+            </button>
+          </form>
+
+          <h2 className="font-semibold mb-2 mt-6">
+            Availability{" "}
+            {availability && (
+              <span className="text-xs font-normal text-gray-500">
+                {availability.summary.hasFreshDeclarations
+                  ? `${availability.summary.confirmedWorkers} workers confirmed fresh`
+                  : "no confirmed capacity"}
+              </span>
+            )}
+          </h2>
+          <div className="space-y-2">
+            {(availability?.declarations ?? []).map((d) => {
+              const lbl = availabilityLabel(d);
+              return (
+                <div key={d.id} className="bg-white p-3 rounded border text-sm">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium">{d.trade}</span>
+                    <span className={`px-2 py-0.5 rounded text-xs ${toneClass[lbl.tone]}`}>
+                      {lbl.label}
+                    </span>
+                  </div>
+                  <p className="text-gray-600 mt-1">
+                    {d.workersCount} workers · {d.dateFrom} → {d.dateTo} · {d.channel} · confirmed{" "}
+                    {d.lastConfirmedAt.slice(0, 10)}
+                  </p>
+                </div>
+              );
+            })}
+            {availability && availability.declarations.length === 0 && (
+              <p className="text-sm text-gray-500 bg-white p-3 rounded border">
+                No availability declared — shown to staff as{" "}
+                <span className={`px-1.5 py-0.5 rounded text-xs ${toneClass.unconfirmed}`}>
+                  Unconfirmed
+                </span>
+              </p>
+            )}
+          </div>
+          <form onSubmit={addDeclaration} className="bg-white p-4 rounded border mt-3 space-y-3">
+            <h3 className="text-sm font-semibold">Declare availability</h3>
+            <div className="grid grid-cols-2 gap-2">
+              <select name="trade" className="border rounded p-1.5 text-sm" required>
+                {TRADES.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+              <input
+                name="workersCount"
+                type="number"
+                min="1"
+                placeholder="Workers *"
+                className="border rounded p-1.5 text-sm"
+                required
+              />
+              <input name="dateFrom" type="date" className="border rounded p-1.5 text-sm" required />
+              <input name="dateTo" type="date" className="border rounded p-1.5 text-sm" required />
+              <select name="channel" className="border rounded p-1.5 text-sm col-span-2">
+                <option value="booking_system">booking_system</option>
+                <option value="email_only">email_only</option>
+              </select>
+            </div>
+            <button className="bg-blue-600 text-white px-3 py-1.5 rounded text-sm">
+              Record declaration
             </button>
           </form>
         </div>

@@ -24,6 +24,12 @@
   // Sending subdomain subcontractor.ww0.dev is verified (2026-10-18; see
   // README "Email pipeline").
   "send_email": [{ "name": "SEND_EMAIL" }],
+  // Workers AI binding for the phase 2 brief builder. NOTE: the pinned
+  // miniflare in vitest-pool-workers (3.20241230.0) cannot resolve wrangler's
+  // wrapped AI binding, so the top-level entry stays disabled — `npm test`
+  // runs against this config. Local `wrangler dev` users can uncomment it for
+  // AI drafting; the route falls back to a 502 + manual form without it.
+  // "ai": { "binding": "AI" },
   // Warm-up cap: max emails sent per UTC day (D1-counted). Start low, ramp slowly.
   "vars": {
     "EMAIL_DAILY_LIMIT": "50"
@@ -46,6 +52,7 @@
         "EMAIL_DAILY_LIMIT": "50"
       },
       "send_email": [{ "name": "SEND_EMAIL" }],
+      "ai": { "binding": "AI" },
       "queues": {
         "consumers": [{ "queue": "email-events-staging" }]
       }
@@ -65,6 +72,7 @@
         "EMAIL_DAILY_LIMIT": "50"
       },
       "send_email": [{ "name": "SEND_EMAIL" }],
+      "ai": { "binding": "AI" },
       "queues": {
         "consumers": [{ "queue": "email-events-production" }]
       }

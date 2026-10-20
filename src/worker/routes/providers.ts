@@ -1,10 +1,25 @@
 import { Hono } from "hono";
 import { and, asc, eq, like } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
-import { companies, services } from "../db/schema";
+import {
+  availabilityDeclarations,
+  companies,
+  services,
+  AVAILABILITY_CHANNELS,
+  type AvailabilityChannel,
+} from "../db/schema";
 import type { AppEnv } from "../app";
 import { auditEventStatement } from "../events";
 import { isPricingModel, isProviderStatus, isTrade } from "../config";
+import {
+  declarationsForCompany,
+  freshness,
+  summariseDeclarations,
+} from "../availability";
+
+export function isAvailabilityChannel(value: string): value is AvailabilityChannel {
+  return (AVAILABILITY_CHANNELS as readonly string[]).includes(value);
+}
 
 type Env = AppEnv;
 
@@ -307,4 +322,92 @@ providersRouter.patch("/:id/services/:serviceId", async (c) => {
     }),
   ]);
   return c.json(next);
+});
+
+// --- Availability declarations (phase 2 booking core) ---
+
+providersRouter.get("/:id/availability", async (c) => {
+  const db = drizzle(c.env.DB);
+  const id = c.req.param("id");
+  const company = (await db.select().from(companies).where(eq(companies.id, id)).limit(1))[0];
+  if (!company) return c.json(providerMessage("not_found"), 404);
+
+  const { trade, dateFrom, dateTo } = c.req.query();
+  const declarations = await declarationsForCompany(db, id, trade || undefined);
+  const summary = summariseDeclarations(declarations, {
+    dateFrom: dateFrom || undefined,
+    dateTo: dateTo || undefined,
+  });
+  return c.json({ declarations, summary });
+});
+
+providersRouter.post("/:id/availability", async (c) => {
+  const db = drizzle(c.env.DB);
+  const user = c.get("user");
+  const id = c.req.param("id");
+  const company = (await db.select().from(companies).where(eq(companies.id, id)).limit(1))[0];
+  if (!company) return c.json(providerMessage("not_found"), 404);
+
+  const body = await c.req.json().catch(() => null);
+  if (!body || typeof body !== "object") return c.json(providerMessage("invalid_json"), 400);
+  const b = body as Record<string, unknown>;
+
+  const trade = typeof b.trade === "string" ? b.trade : "";
+  if (!isTrade(trade))
+    return c.json(
+      providerMessage("invalid_trade: allowed trades electrical, plumbing, hvac, drywall, flooring, painting"),
+      400,
+    );
+  const workersCount = typeof b.workersCount === "number" ? b.workersCount : 0;
+  if (!Number.isInteger(workersCount) || workersCount < 1)
+    return c.json(providerMessage("workers_count_must_be_positive_integer"), 400);
+  const dateFrom = typeof b.dateFrom === "string" ? b.dateFrom : "";
+  const dateTo = typeof b.dateTo === "string" ? b.dateTo : "";
+  const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+  if (!dateRe.test(dateFrom) || !dateRe.test(dateTo) || dateFrom > dateTo)
+    return c.json(providerMessage("invalid_date_range: need dateFrom <= dateTo as YYYY-MM-DD"), 400);
+  const channel = typeof b.channel === "string" && b.channel ? b.channel : "booking_system";
+  if (!isAvailabilityChannel(channel))
+    return c.json(
+      providerMessage("invalid_channel: allowed values booking_system, email_only"),
+      400,
+    );
+
+  const lastConfirmedAt = new Date().toISOString();
+  const inserted = await db
+    .insert(availabilityDeclarations)
+    .values({
+      companyId: id,
+      trade,
+      workersCount,
+      dateFrom,
+      dateTo,
+      channel,
+      lastConfirmedAt,
+      notes: typeof b.notes === "string" ? b.notes : null,
+      createdBy: user.id,
+    })
+    .returning();
+  const declaration = inserted[0]!;
+
+  await db.batch([
+    auditEventStatement(db, {
+      actorUserId: user.id,
+      actorEmail: user.email,
+      entity: "company",
+      entityId: id,
+      action: "provider_updated",
+      payload: {
+        availabilityDeclared: {
+          declarationId: declaration.id,
+          trade,
+          workersCount,
+          dateFrom,
+          dateTo,
+          channel,
+        },
+      },
+    }),
+  ]);
+  return c.json({ ...declaration, freshness: freshness(lastConfirmedAt) }, 201);
 });

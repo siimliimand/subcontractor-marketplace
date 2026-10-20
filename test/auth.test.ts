@@ -86,3 +86,31 @@ describe("staff access", () => {
     expect(events[0]!.actorEmail).toBe("outsider@example.com");
   });
 });
+
+describe("phase 2 routes require Access auth", () => {
+  const cases: [string, string, string][] = [
+    ["POST", "/api/requests/00000000-0000-0000-0000-000000000000/match", "{}"],
+    ["POST", "/api/requests/00000000-0000-0000-0000-000000000000/bookings/request", "{}"],
+    ["POST", "/api/requests/00000000-0000-0000-0000-000000000000/bookings/confirm", "{}"],
+    ["POST", "/api/requests/00000000-0000-0000-0000-000000000000/work-start", "{}"],
+    ["POST", "/api/requests/00000000-0000-0000-0000-000000000000/holds", "{}"],
+    ["GET", "/api/requests/00000000-0000-0000-0000-000000000000/holds", ""],
+    ["POST", "/api/holds/00000000-0000-0000-0000-000000000000/release", "{}"],
+    ["POST", "/api/briefs/draft", '{"sourceText":"a sufficiently long description"}'],
+    ["POST", "/api/briefs/00000000-0000-0000-0000-000000000000/approve", "{}"],
+    ["GET", "/api/briefs/00000000-0000-0000-0000-000000000000", ""],
+    ["POST", "/api/providers/00000000-0000-0000-0000-000000000000/availability", "{}"],
+    ["GET", "/api/providers/00000000-0000-0000-0000-000000000000/availability", ""],
+  ];
+
+  for (const [method, path, body] of cases) {
+    it(`${method} ${path} rejects unauthenticated requests (403)`, async () => {
+      const res = await SELF.fetch(`https://example.com${path}`, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: body || undefined,
+      });
+      expect(res.status).toBe(403);
+    });
+  }
+});

@@ -91,10 +91,64 @@ export default function RequestDetail() {
         <span className={`px-2 py-0.5 rounded text-xs ${statusBadge(r.status)}`}>{r.status}</span>
       </div>
       <p className="text-sm text-gray-500 mb-4">
-        {r.trade} · {r.location} · start {r.startDate} · crew {r.crewSize}
+        {data.trades.map((t, i) => (
+          <span key={t.trade}>
+            {i > 0 && ", "}
+            {t.trade}
+            {t.isPrimary && <span className="text-gray-400"> (primary)</span>}
+          </span>
+        ))}
+        {" · "}
+        {r.location} · start {r.startDate} · crew {r.crewSize}
         {r.pmName ? ` · PM ${r.pmName}` : ""}
         {r.cancelledBy ? ` · cancelled by ${r.cancelledBy}: ${r.cancelReason}` : ""}
       </p>
+
+      {data.comparison.length > 0 && (
+        <Card title="Response comparison (by trade)">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+            {data.comparison.map((group) => (
+              <div key={group.trade} className="border rounded p-2">
+                <p className="font-medium mb-1">
+                  {group.trade}
+                  {group.isPrimary ? " (primary)" : ""}
+                </p>
+                {group.entries.length === 0 ? (
+                  <p className="text-gray-400 text-xs">No responses</p>
+                ) : (
+                  <ul className="space-y-1">
+                    {group.entries.map((e) => (
+                      <li key={e.responseId} className="flex justify-between gap-2">
+                        <span>
+                          {e.legalName} — {e.type}
+                          {e.workersCount ? ` · ${e.workersCount} workers from ${e.availableFrom ?? "?"}` : ""}
+                        </span>
+                        <span
+                          className={
+                            e.availability.label === "current"
+                              ? "text-green-700 whitespace-nowrap"
+                              : e.availability.label === "unconfirmed"
+                                ? "text-gray-400 whitespace-nowrap"
+                                : "text-yellow-700 whitespace-nowrap"
+                          }
+                        >
+                          {e.availability.label === "current"
+                            ? "Confirmed"
+                            : e.availability.label === "unconfirmed"
+                              ? "Unconfirmed"
+                              : e.availability.label === "aging"
+                                ? "Aging — reconfirm"
+                                : "Stale — reconfirm"}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
 
       {error && <div className="mb-4 text-sm text-red-600 bg-red-50 p-2 rounded">{error}</div>}
 
@@ -168,6 +222,19 @@ export default function RequestDetail() {
               </div>
             </Card>
           )}
+
+          <MatchingPanel
+            requestId={id ?? ""}
+            disabled={["draft", "booked", "cancelled", "closed"].includes(r.status)}
+            onMatched={load}
+          />
+
+          <BookingFlowPanel
+            data={data}
+            providers={providers}
+            disabled={["booked", "cancelled", "closed"].includes(r.status)}
+            onChanged={load}
+          />
 
           <OutreachPanel
             providers={providers}
@@ -574,5 +641,340 @@ function BookingForm({
       />
       <button className="bg-green-600 text-white px-3 py-1.5 rounded text-sm">Confirm booking</button>
     </form>
+  );
+}
+
+type FactorResult = {
+  value: number;
+  weighted: number;
+  missing: boolean;
+  inputs: Record<string, unknown>;
+};
+
+type FactorBreakdown = Record<string, FactorResult>;
+
+type MatchRun = {
+  trade: string;
+  created: number;
+  candidates?: {
+    companyId: string;
+    legalName: string;
+    rank: number;
+    score: number;
+    specialisation: string;
+    factors: FactorBreakdown;
+  }[];
+  excluded?: { companyId: string; legalName: string; reason: string }[];
+};
+
+const FACTOR_LABELS: Record<string, string> = {
+  confirmedCapacity: "Confirmed capacity",
+  specialisationDepth: "Specialisation depth",
+  responseHistory: "Response history",
+  reliability: "Reliability",
+  proximity: "Proximity to site",
+  reviewQuality: "Review quality",
+  priceFit: "Price fit",
+};
+
+function FactorRow({ name, f }: { name: string; f: FactorResult }) {
+  const label = FACTOR_LABELS[name] ?? name;
+  if (f.missing) {
+    return (
+      <li className="text-gray-400">
+        {label}: no data — contributes 0
+        {typeof f.inputs.note === "string" ? ` (${f.inputs.note})` : ""}
+      </li>
+    );
+  }
+  return (
+    <li>
+      {label}: {(f.value * 100).toFixed(0)}% → +{(f.weighted * 100).toFixed(1)} pts
+    </li>
+  );
+}
+
+function MatchingPanel({
+  requestId,
+  disabled,
+  onMatched,
+}: {
+  requestId: string;
+  disabled: boolean;
+  onMatched: () => Promise<void>;
+}) {
+  const [runs, setRuns] = useState<MatchRun[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function run(widen: boolean) {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/requests/${requestId}/match`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(widen ? { widen: true } : {}),
+      });
+      const body = (await res.json()) as { runs?: MatchRun[]; error?: string };
+      if (!res.ok) {
+        setError(body.error ?? `match failed (${res.status})`);
+      } else {
+        setRuns(body.runs ?? []);
+        await onMatched();
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card title="Matching v1">
+      {disabled ? (
+        <p className="text-sm text-gray-500">Matching not available in this status.</p>
+      ) : (
+        <div className="flex gap-2">
+          <button
+            disabled={busy}
+            onClick={() => run(false)}
+            className="bg-blue-600 text-white px-3 py-1.5 rounded text-sm disabled:opacity-50"
+          >
+            Run matching
+          </button>
+          <button
+            disabled={busy}
+            onClick={() => run(true)}
+            className="bg-gray-700 text-white px-3 py-1.5 rounded text-sm disabled:opacity-50"
+            title="Widen outreach once, toward 10 providers per trade"
+          >
+            Widen (once, toward 10)
+          </button>
+        </div>
+      )}
+      {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+      {runs?.map((run, i) => (
+        <div key={i} className="mt-3 border rounded p-2 text-sm">
+          <p className="font-medium">
+            {run.trade}: {run.created} provider(s) in batch
+          </p>
+          {run.candidates?.map((cand) => (
+            <div key={cand.companyId} className="mt-2 border-t pt-2">
+              <p>
+                #{cand.rank} {cand.legalName} — score {(cand.score * 100).toFixed(1)} (
+                {cand.specialisation})
+              </p>
+              <ul className="ml-4 list-disc text-xs text-gray-600">
+                {Object.entries(cand.factors).map(([name, f]) => (
+                  <FactorRow key={name} name={name} f={f} />
+                ))}
+              </ul>
+              <p className="text-xs text-gray-400">
+                Proximity is a heuristic match on free-text service areas in phase 2.
+              </p>
+            </div>
+          ))}
+          {run.excluded && run.excluded.length > 0 && (
+            <details className="mt-2">
+              <summary className="text-xs text-gray-500 cursor-pointer">
+                {run.excluded.length} provider(s) excluded by hard filters
+              </summary>
+              <ul className="ml-4 list-disc text-xs text-gray-500">
+                {run.excluded.map((e) => (
+                  <li key={e.companyId}>
+                    {e.legalName}: {e.reason}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </div>
+      ))}
+    </Card>
+  );
+}
+
+function BookingFlowPanel({
+  data,
+  providers,
+  disabled,
+  onChanged,
+}: {
+  data: RequestDetailData;
+  providers: { company: { id: string; legalName: string } }[] | null;
+  disabled: boolean;
+  onChanged: () => Promise<void>;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const openRequests = data.bookingRequests.filter(({ br }) => br.state === "requested");
+  const activeHolds = data.holds.filter((h) => h.state === "active");
+
+  async function post(path: string, body: unknown): Promise<{ ok: boolean; body: Record<string, unknown> }> {
+    const res = await fetch(`/api/requests/${data.request.id}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const body2 = (await res.json()) as Record<string, unknown>;
+    if (!res.ok) {
+      if (body2.error === "capacity_conflict") {
+        const w = body2.winner as { requestId?: string } | null;
+        setError(
+          `Capacity conflict: provider already booked for overlapping dates${w?.requestId ? ` (booking on request ${w.requestId.slice(0, 8)}…)` : ""}. First confirmed booking stands.`,
+        );
+      } else {
+        setError(String(body2.error ?? `failed (${res.status})`));
+      }
+      return { ok: false, body: body2 };
+    }
+    setError(null);
+    return { ok: true, body: body2 };
+  }
+
+  async function submit(e: FormEvent<HTMLFormElement>, path: string, numeric?: string) {
+    e.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    try {
+      const d = Object.fromEntries(new FormData(e.currentTarget)) as Record<string, string>;
+      if (numeric) d[numeric] = String(Number(d[numeric]));
+      const { ok } = await post(path, d);
+      if (ok) {
+        (e.target as HTMLFormElement).reset();
+        await onChanged();
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card title="Booking (request → confirm)">
+      {disabled ? (
+        <p className="text-sm text-gray-500">Booking not available in this status.</p>
+      ) : (
+        <div className="space-y-3">
+          <form
+            onSubmit={(e) => submit(e, "/bookings/request", "workersCount")}
+            className="flex gap-2 items-center flex-wrap text-sm"
+          >
+            <select name="responseId" required className="border rounded p-1.5 text-sm">
+              {(data.responses ?? [])
+                .filter(({ response }) => ["interest", "quote"].includes(response.type))
+                .map(({ response, provider }) => (
+                  <option key={response.id} value={response.id}>
+                    {provider?.legalName ?? response.companyId.slice(0, 8)} — {response.type}
+                  </option>
+                ))}
+            </select>
+            <select name="trade" required className="border rounded p-1.5 text-sm">
+              {data.trades.map((t) => (
+                <option key={t.trade} value={t.trade}>
+                  {t.trade}
+                </option>
+              ))}
+            </select>
+            <input name="startDate" type="date" required className="border rounded p-1.5 text-sm" />
+            <input name="endDate" type="date" required className="border rounded p-1.5 text-sm" />
+            <input
+              name="workersCount"
+              type="number"
+              min="1"
+              placeholder="Workers"
+              required
+              className="border rounded p-1.5 text-sm w-24"
+            />
+            <button className="bg-blue-600 text-white px-3 py-1.5 rounded text-sm" disabled={busy}>
+              Request booking
+            </button>
+          </form>
+
+          {openRequests.map(({ br, provider }) => (
+            <div key={br.id} className="flex items-center gap-2 text-sm border rounded p-2">
+              <span className="flex-1">
+                {provider?.legalName ?? br.companyId.slice(0, 8)} · {br.trade} · {br.startDate} →{" "}
+                {br.endDate} · {br.workersCount} workers
+              </span>
+              <button
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true);
+                  try {
+                    const { ok } = await post("/bookings/confirm", { bookingRequestId: br.id });
+                    if (ok) await onChanged();
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+                className="bg-green-600 text-white px-3 py-1 rounded text-sm disabled:opacity-50"
+              >
+                Confirm
+              </button>
+            </div>
+          ))}
+
+          <form
+            onSubmit={(e) => submit(e, "/holds", "workersCount")}
+            className="flex gap-2 items-center flex-wrap text-sm border-t pt-2"
+          >
+            <select name="companyId" required className="border rounded p-1.5 text-sm">
+              {(providers ?? []).map(({ company }) => (
+                <option key={company.id} value={company.id}>
+                  {company.legalName}
+                </option>
+              ))}
+            </select>
+            <select name="trade" required className="border rounded p-1.5 text-sm">
+              {data.trades.map((t) => (
+                <option key={t.trade} value={t.trade}>
+                  {t.trade}
+                </option>
+              ))}
+            </select>
+            <input name="startDate" type="date" required className="border rounded p-1.5 text-sm" />
+            <input name="endDate" type="date" required className="border rounded p-1.5 text-sm" />
+            <input
+              name="workersCount"
+              type="number"
+              min="1"
+              placeholder="Workers"
+              required
+              className="border rounded p-1.5 text-sm w-24"
+            />
+            <button className="bg-gray-700 text-white px-3 py-1.5 rounded text-sm" disabled={busy}>
+              Place 48h hold
+            </button>
+          </form>
+
+          {activeHolds.map((h) => (
+            <div key={h.id} className="flex items-center gap-2 text-xs text-gray-600">
+              <span className="flex-1">
+                Hold · {h.trade} · {h.startDate} → {h.endDate} · expires {h.expiresAt.slice(0, 16)}
+              </span>
+              <button
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true);
+                  try {
+                    await fetch(`/api/holds/${h.id}/release`, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ reason: "released by staff" }),
+                    });
+                    await onChanged();
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+                className="text-red-600 hover:underline"
+              >
+                Release
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+    </Card>
   );
 }

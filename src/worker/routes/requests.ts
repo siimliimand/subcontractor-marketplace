@@ -1,12 +1,15 @@
 import { Hono } from "hono";
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import type { BatchItem } from "drizzle-orm/batch";
 import { drizzle } from "drizzle-orm/d1";
 import {
   auditEvents,
+  bookingRequests,
   bookings,
   companies,
+  holds,
   outreachEntries,
+  requestTrades,
   requests,
   responses,
   timeEntries,
@@ -14,10 +17,33 @@ import {
 } from "../db/schema";
 import type { AppEnv } from "../app";
 import { auditEventStatement, type EventAction } from "../events";
-import { isTrade, type RequestStatus } from "../config";
+import { isTrade, type RequestStatus, type Trade } from "../config";
 import { canTransition, PRE_BOOKED_STATUSES } from "../lifecycle";
+import { buildComparison } from "../comparison";
 
 export const requestsRouter = new Hono<AppEnv>();
+
+/**
+ * Multi-trade requests (Decision 3): accept `trades: string[]` (new) or the
+ * legacy single `trade`. Returns the deduplicated trade set in order — the
+ * first entry is the primary trade — or an error string.
+ */
+function parseTrades(b: Record<string, unknown>): { trades?: Trade[]; error?: string } {
+  if (b.trades === undefined && b.trade === undefined) return {};
+  const raw = b.trades !== undefined ? b.trades : [b.trade];
+  if (!Array.isArray(raw)) return { error: "trades_must_be_an_array" };
+  const trades: Trade[] = [];
+  for (const t of raw) {
+    if (typeof t !== "string" || !isTrade(t))
+      return {
+        error:
+          "invalid_trade: allowed trades electrical, plumbing, hvac, drywall, flooring, painting",
+      };
+    if (!trades.includes(t)) trades.push(t);
+  }
+  if (trades.length === 0) return { error: "at_least_one_trade_required" };
+  return { trades };
+}
 
 function requiredFieldsPresent(r: {
   title?: string | null;
@@ -52,7 +78,15 @@ requestsRouter.get("/", async (c) => {
   const { status, trade } = c.req.query();
   const conditions = [];
   if (status) conditions.push(eq(requests.status, status));
-  if (trade) conditions.push(eq(requests.trade, trade));
+  // Multi-trade (Decision 3): a trade filter matches any trade in the
+  // required-trades set, not just the primary.
+  if (trade)
+    conditions.push(
+      inArray(
+        requests.id,
+        db.select({ id: requestTrades.requestId }).from(requestTrades).where(eq(requestTrades.trade, trade)),
+      ),
+    );
   const rows = await db
     .select()
     .from(requests)
@@ -76,6 +110,10 @@ requestsRouter.post("/", async (c) => {
     startDate: typeof b.startDate === "string" ? b.startDate : "",
     crewSize: typeof b.crewSize === "number" ? b.crewSize : 0,
   };
+  const parsed = parseTrades(b);
+  if (parsed.error) return c.json({ error: parsed.error }, 400);
+  const trades = parsed.trades ?? (isTrade(candidate.trade) ? [candidate.trade] : []);
+  candidate.trade = trades[0] ?? candidate.trade;
   if (!isTrade(candidate.trade))
     return c.json(
       {
@@ -103,16 +141,19 @@ requestsRouter.post("/", async (c) => {
   const request = inserted[0]!;
 
   await db.batch([
+    ...trades.map((trade, i) =>
+      db.insert(requestTrades).values({ requestId: request.id, trade, isPrimary: i === 0 ? 1 : 0 }),
+    ),
     auditEventStatement(db, {
       actorUserId: user.id,
       actorEmail: user.email,
       entity: "request",
       entityId: request.id,
       action: "request_created",
-      payload: { title: request.title, trade: request.trade, crewSize: request.crewSize },
+      payload: { title: request.title, trade: request.trade, trades, crewSize: request.crewSize },
     }),
-  ]);
-  return c.json(request, 201);
+  ] as unknown as [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]]);
+  return c.json({ ...request, trades }, 201);
 });
 
 requestsRouter.get("/:id", async (c) => {
@@ -121,7 +162,7 @@ requestsRouter.get("/:id", async (c) => {
   const request = (await db.select().from(requests).where(eq(requests.id, id)).limit(1))[0];
   if (!request) return c.json({ error: "not_found" }, 404);
 
-  const [requestResponses, requestBookings, requestOutreach, requestTime, events] =
+  const [requestResponses, requestBookings, requestOutreach, requestTime, trades, bookingReqs, requestHolds, events] =
     await Promise.all([
       db
         .select({ response: responses, provider: companies })
@@ -143,16 +184,39 @@ requestsRouter.get("/:id", async (c) => {
       db.select().from(timeEntries).where(eq(timeEntries.requestId, id)),
       db
         .select()
+        .from(requestTrades)
+        .where(eq(requestTrades.requestId, id))
+        .orderBy(desc(requestTrades.isPrimary), asc(requestTrades.trade)),
+      db
+        .select({ br: bookingRequests, provider: companies })
+        .from(bookingRequests)
+        .leftJoin(companies, eq(companies.id, bookingRequests.companyId))
+        .where(eq(bookingRequests.requestId, id))
+        .orderBy(asc(bookingRequests.createdAt)),
+      db.select().from(holds).where(eq(holds.requestId, id)).orderBy(asc(holds.createdAt)),
+      db
+        .select()
         .from(auditEvents)
         .where(and(eq(auditEvents.entity, "request"), eq(auditEvents.entityId, id)))
         .orderBy(asc(auditEvents.occurredAt)),
     ]);
 
+  const comparison = await buildComparison(
+    db,
+    id,
+    trades.map((t) => ({ trade: t.trade, isPrimary: t.isPrimary === 1 })),
+    request.startDate,
+  );
+
   return c.json({
     request,
+    trades: trades.map((t) => ({ trade: t.trade, isPrimary: t.isPrimary === 1 })),
     responses: requestResponses,
     bookings: requestBookings,
+    bookingRequests: bookingReqs,
+    holds: requestHolds,
     outreach: requestOutreach,
+    comparison,
     timeEntries: requestTime,
     events,
   });
@@ -178,16 +242,18 @@ requestsRouter.patch("/:id", async (c) => {
       patch[field] = (b[field] as string).trim();
     }
   }
-  if (b.trade !== undefined) {
-    if (typeof b.trade !== "string" || !isTrade(b.trade))
-      return c.json(
-        {
-          error:
-            "invalid_trade: allowed trades electrical, plumbing, hvac, drywall, flooring, painting",
-        },
-        400,
-      );
-    patch.trade = b.trade;
+  if (b.trade !== undefined || b.trades !== undefined) {
+    const parsed = parseTrades(b);
+    if (parsed.error) return c.json({ error: parsed.error }, 400);
+    if (!parsed.trades) return c.json({ error: "at_least_one_trade_required" }, 400);
+    patch.trade = parsed.trades[0];
+    // Replace the whole required-trades set; first entry is primary.
+    await db.batch([
+      db.delete(requestTrades).where(eq(requestTrades.requestId, id)),
+      ...parsed.trades.map((trade, i) =>
+        db.insert(requestTrades).values({ requestId: id, trade, isPrimary: i === 0 ? 1 : 0 }),
+      ),
+    ] as unknown as [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]]);
   }
   if (b.crewSize !== undefined) {
     if (typeof b.crewSize !== "number" || b.crewSize < 1)
@@ -236,6 +302,11 @@ requestsRouter.post("/:id/transition", async (c) => {
 
   if (to === "approved") {
     const missing = requiredFieldsPresent(request);
+    const tradeRows = await db
+      .select()
+      .from(requestTrades)
+      .where(eq(requestTrades.requestId, id));
+    if (!tradeRows.length) missing.push("trade");
     if (missing.length)
       return c.json({ error: `approval_requires_complete_brief: missing ${missing.join(", ")}` }, 400);
   }
@@ -421,6 +492,7 @@ requestsRouter.post("/:id/bookings", async (c) => {
       requestId: id,
       responseId,
       companyId: response.companyId,
+      trade: request.trade,
       startDate,
       endDate,
       workersCount,

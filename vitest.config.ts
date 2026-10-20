@@ -15,6 +15,7 @@ export default defineWorkersConfig({
               "f9c790f94f4775272624a1a95fb63096455bcceba53798801629eaa4d80f55f1",
             EMAIL_FROM: "Subcrew Test <outreach@test.example>",
             EMAIL_DAILY_LIMIT: "10",
+            BOOKING_HOLDS_ENABLED: "true",
           },
           d1Databases: ["DB"],
           // NOTE: miniflare 3.20241230.0 (pinned by vitest-pool-workers 0.5)

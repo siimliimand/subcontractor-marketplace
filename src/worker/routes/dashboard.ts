@@ -179,7 +179,31 @@ dashboardRouter.get("/overview", async (c) => {
     manualQualified: channelCounts.get("manual") ?? 0,
   };
 
-  return c.json({ ...metrics, email });
+  // Booking flow (phase 2): requested → confirmed counts from the funnel events
+  const bookingFlowRows = await db.all<{ action: string; n: number }>(sql`
+    SELECT action, COUNT(*) AS n
+    FROM audit_events
+    WHERE action IN ('booking_requested', 'booking_confirmed')
+    GROUP BY action
+  `);
+  const bookingCounts = new Map(
+    (bookingFlowRows as unknown as Array<{ action: string; n: number }>).map((r) => [
+      r.action,
+      Number(r.n),
+    ]),
+  );
+  const bookingRequested = bookingCounts.get("booking_requested") ?? 0;
+  const bookingConfirmed = bookingCounts.get("booking_confirmed") ?? 0;
+
+  return c.json({
+    ...metrics,
+    bookingFlow: {
+      requested: bookingRequested,
+      confirmed: bookingConfirmed,
+      conversion: bookingRequested === 0 ? null : bookingConfirmed / bookingRequested,
+    },
+    email,
+  });
 });
 
 dashboardRouter.get("/supply", async (c) => {
