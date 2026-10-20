@@ -61,3 +61,16 @@ every cockpit API, remain behind valid Access JWT authentication as before.
 - **WHEN** any invalid, used, or expired token URL is requested
 - **THEN** the response is a neutral error page and does not reveal which of the three
   cases applies
+
+### Requirement: Exportable audit trail
+Staff SHALL be able to export the audit trail as CSV, filtered by date range and
+optionally by company and action type. Exports SHALL require the same staff
+authentication as the cockpit and SHALL themselves be recorded as audit events.
+
+#### Scenario: Date-range export
+- **WHEN** staff exports the audit trail for a two-week range
+- **THEN** a CSV streams every event in the range with timestamp, actor, action, and subject, and an `audit_exported` event records the export parameters
+
+#### Scenario: Company-scoped export
+- **WHEN** staff exports filtered to one company
+- **THEN** only events pertaining to that company are included

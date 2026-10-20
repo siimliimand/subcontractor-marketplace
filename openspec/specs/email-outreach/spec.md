@@ -60,3 +60,17 @@ The system SHALL serve a tracking pixel on a public route that records one
 - **WHEN** the mail client fetches the pixel for a sent token
 - **THEN** exactly one `email_opened` audit event is recorded; subsequent fetches
   record nothing
+
+### Requirement: Manual suppression management
+Staff SHALL be able to add an address to the suppression list (with reason), remove
+an entry (with reason), and list current entries with their reasons and origins
+(bounce or manual). Every change SHALL be audit-logged with the staff actor.
+
+#### Scenario: Provider asks to stop emails
+- **WHEN** staff adds an address with reason "provider request"
+- **THEN** all send paths skip that address with the entry visibly marked skipped,
+  and the addition is audited
+
+#### Scenario: Wrongful suppression corrected
+- **WHEN** staff removes a manually-added suppression with a reason
+- **THEN** the address becomes sendable again and the removal is audited
