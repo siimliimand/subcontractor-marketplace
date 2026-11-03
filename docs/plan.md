@@ -228,7 +228,7 @@ No substantial development starts until responsibility for delivering and operat
 - [x] Hold the partner meeting and settle the decisions above → decision log, 18 Oct 2026
 - [x] Write interview guides for project managers and contractors → `docs/phase0/interview-guides.md`
 - [ ] Complete the interviews (~10 PMs, ~15 contractors)
-- [ ] Research existing Estonian portals, procurement tools and scheduling software
+- [x] Research existing Estonian portals, procurement tools and scheduling software → `docs/phase0/competitive-research.md`
 - [x] Check access and terms for the public registers listed in section 6 → `docs/phase0/register-findings.md`
 - [x] Draft the data model: provider, service, capacity, request, response, booking, outreach → `docs/phase0/data-model-erd.md` (live schema + Phase 2 migrations)
 - [x] Sketch key screens: provider onboarding, request via AI chat, response email, availability view → `docs/phase0/wireframes.md`
