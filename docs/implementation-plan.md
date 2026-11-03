@@ -67,7 +67,7 @@ flowchart LR
 | 1 | Finalise data model v1 from Phase 0 skeleton; implement migrations; seed/fixture strategy; audit-event table (immutable) | ✅ Done — Drizzle schema (users, companies, services, requests, responses, bookings, outreach_entries, audit_events, time_entries); migrations applied to staging + production D1 (EU); append-only audit events written in the same D1 batch as mutations, fixed action enum |
 | 2 | **Internal admin console ("concierge cockpit")** — the tool we run the pilot with: create/manage providers, create requests on behalf of PMs, log manual outreach, record responses and outcomes, tag each step manual vs automated | ✅ Done — Hono + React SPA on Workers (`concierge-cockpit-staging` / `-production`), Cloudflare Access JWT middleware with staff auto-provisioning + allowlist, request state machine, outreach batches with duplicate/opt-out/closed rejection, per-request effort rollups, funnel dashboard v0 |
 | 3 | Email pipeline: onboard and verify the sending subdomain on Cloudflare Email Service early (domain warm-up), then transactional templates with **one-click Accept / Quote / Decline links with secure single-use expiring tokens**; consume `message.delivered`/bounce Queues events; self-hosted open tracking pixel on Workers (feeds `email_opened`) | ✅ Done (code + staging) — tokens, batch sender with suppression + daily cap, public response pages, tracking pixel, queue consumer; sending subdomain `subcontractor.ww0.dev` verified (2026-10-18), staging deployed; local e2e journey test covers send → open → accept → funnel + dashboard. Caveats: Cloudflare offers no lifecycle-event → Queue routing yet (consumer dormant, statuses stay `sent`); remote staging/production e2e pending (openspec email-pipeline tasks 7.4/7.5) |
-| 4 | Analytics events wired into admin console actions end-to-end; funnel dashboard v0 (may query the DB directly); smoke tests + staging data reset procedure | ✅ Done for cockpit actions — every mutation writes an audit event (`channel='manual'`); dashboard v0 (overview / supply / effort) live; 69 integration tests (vitest + miniflare D1) cover auth, providers, requests, outreach, effort, dashboard, email pipeline |
+| 4 | Analytics events wired into admin console actions end-to-end; funnel dashboard v0 (may query the DB directly); smoke tests + staging data reset procedure | ✅ Done for cockpit actions — every mutation writes an audit event (`channel='manual'`); dashboard v0 (overview / supply / effort) live; 228 integration tests (vitest + miniflare D1; count verified 2026-11-03) cover auth, providers, requests, outreach, effort, dashboard, email pipeline |
 
 ### Workstream C — GTM prep
 
@@ -183,8 +183,7 @@ production `a8e3a2ec`). Demand-gated tracks are **off by config**
 (`MONETIZATION_PILOT_ENABLED`, `PLANNER_AI_ENABLED`) and switch on when the
 mini-gates below are met — no redeploy. Calendar fetch is live
 (`CALENDAR_FETCH_ENABLED=true`); feeds only exist once staff register them.
-Owner follow-ups: add an Access bypass for `/u/*` (provider portal, same as
-`/e/`,`/t/`), and set `MTR_BADGES_ENABLED` remains pending TTJA confirmation.
+Owner follow-ups (updated 2026-11-03): the provider-portal route (`pathname.startsWith("/u/")`) is already outside the Access guard — the worker dispatches it to the provider portal ahead of the Access-guarded branches, the same treatment as the /e/ and /t/ public token routes. `MTR_BADGES_ENABLED` remains pending TTJA confirmation.
 
 **Goal:** grow only what Gate 3 proved. Each item below gets its own mini-gate: hypothesis → success metric → decision date. Order follows expected demand, not developer enthusiasm.
 

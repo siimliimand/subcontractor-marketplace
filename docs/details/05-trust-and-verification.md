@@ -8,12 +8,12 @@ In construction, trust matters more than price. Estonian public registers let us
 
 | Element | Purpose | Status |
 |---|---|---|
-| Business register (Äriregister) data, incl. activity codes | Verify the company exists; pre-seed provider profiles | To check: access method and terms |
-| Tax debt information (Tax and Customs Board) | Large firms avoid subcontractors with arrears | To check: what is publicly available |
-| Economic activities register (MTR) | Many construction activities require registration | To check: which trades and how to query |
-| Smart-ID / Mobile-ID login | Strong identity for both sides; signals seriousness | To check: provider and cost |
+| Business register (Äriregister) data, incl. activity codes | Verify the company exists; pre-seed provider profiles | Checked 2026-11-03 ([register-findings](../phase0/register-findings.md) §1): daily open data + free real-time API (contract to sign), CC BY 4.0 — use now for pre-seeding + existence badge |
+| Tax debt information (Tax and Customs Board) | Large firms avoid subcontractors with arrears | Checked 2026-11-03 ([register-findings](../phase0/register-findings.md) §3): public inquiry for arrears >€100 — manual checks only at pilot scale; reuse terms to lawyer review |
+| Economic activities register (MTR) | Many construction activities require registration | Checked 2026-11-03 ([register-findings](../phase0/register-findings.md) §2): mtr.ttja.ee public search + daily open-data XML, CC BY-SA 3.0 pending TTJA confirmation; import + verification code shipped, badge gated by `MTR_BADGES_ENABLED` |
+| Smart-ID / Mobile-ID login | Strong identity for both sides; signals seriousness | Checked 2026-11-03 ([register-findings](../phase0/register-findings.md) §4): priced (from €60/mo), deferred, not blocking — provider auth = email tokens, staff auth = Cloudflare Access |
 | Documents on profile | Insurance, certificates, safety training, references, with expiry reminders | Design needed |
-| Reviews tied to completed bookings | Prevents fake or open reviews | Design needed |
+| Reviews tied to completed bookings | Prevents fake or open reviews | Shipped 2026-11-03: booking reviews live (one review per completed booking, `src/worker/routes/reviews.ts`) |
 | Reliability metrics | Response rate, acceptance rate, accepted-but-not-delivered | Collected from day one |
 
 Do not assume every trade requires the same registrations, or that every register can be freely queried or republished.

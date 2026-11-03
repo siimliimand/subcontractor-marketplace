@@ -43,8 +43,8 @@ npm run dev                           # wrangler dev (API :8787) + vite (UI :517
 npm test
 ```
 
-69 integration tests run against real D1 in miniflare (auth, providers, requests,
-outreach, effort, dashboard, email pipeline, full email journey).
+228 integration tests run against real D1 in miniflare (auth, providers, requests,
+outreach, effort, dashboard, email pipeline, full email journey). Count verified 2026-11-03.
 
 ## Schema changes
 
@@ -77,7 +77,7 @@ is empty.
 
 ## CI
 
-`.github/workflows/ci.yml` runs typecheck, the 69 integration tests and the build on
+`.github/workflows/ci.yml` runs typecheck, the 228 integration tests and the build on
 every push to `main` and on pull requests. Requires the repo to be pushed to GitHub
 with Actions enabled.
 

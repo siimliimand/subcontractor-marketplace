@@ -34,18 +34,20 @@ may be appended to `EVENT_ACTIONS` but never renamed (dashboards key on them).
 | # | Planned event (details/06) | Implemented action | Trigger | Phase |
 |---|---|---|---|---|
 | 1 | `request_created` | `request_created` | staff creates draft request | ✅ live |
-| 2 | `brief_approved` | *(none — merged into)* `request_approved` | approval gate = brief approval in concierge flow; split into two events when the PM-facing brief builder ships so "AI proposal → PM edit → approve" is measurable | ✅ live (merged) / split in Phase 2 |
+| 2 | `brief_approved` | `brief_approved` | PM approves the AI-drafted brief in the brief builder (entity `brief`; `request_approved` remains the separate request-approval event) | ✅ live |
 | 3 | `matched` | `matched` | approval → eligible providers selected | ✅ live |
 | 4 | `outreach_sent` | `outreach_sent` | batch sent (payload: batch id, count) | ✅ live |
-| 5 | `email_opened` | *(pending)* | open-tracking pixel, automated channel | Phase 1 wk3 (email pipeline) |
+| 5 | `email_opened` | `email_opened` | open-tracking pixel on the public response link (automated channel) | ✅ live |
 | 6 | `response_received` | `response_received` | any provider response | ✅ live |
 | 7 | `qualified_response` | `qualified_response` | interest/quote + capacity + dates | ✅ live |
 | 8 | `quote_submitted` | `quote_submitted` | response type = quote | ✅ live |
-| 9 | `booking_requested` | *(none — concierge merges into)* `booking_confirmed` | split when PM self-service booking ships | Phase 2 |
+| 9 | `booking_requested` | `booking_requested` | provider proposes a booking from the provider portal (`booking_confirmed` remains the separate PM-acceptance event) | ✅ live |
 | 10 | `booking_confirmed` | `booking_confirmed` | PM accepts provider confirmation | ✅ live |
-| 11 | `work_started` | *(pending)* | provider/customer marks start | Phase 2 (booking core) |
+| 11 | `work_started` | `work_started` | provider marks work started on a booked request | ✅ live |
 | 12 | `completion_confirmed` | `completion_confirmed` | outcome recorded | ✅ live |
-| 13 | `review_submitted` | *(deferred)* | reviews tied to bookings are Phase 4 | Phase 4 |
+| 13 | `review_submitted` | `review_submitted` | review tied to a completed booking is submitted | ✅ live |
+
+Rows 2, 5, 9, 11 and 13 re-verified live in the shipped code 2026-11-03; each write path is covered by the integration suite.
 
 Supporting events (not funnel steps, needed for denominators/ops): `request_updated`,
 `request_cancelled` (payload: cancelledBy + reason — feeds the customer-cancelled

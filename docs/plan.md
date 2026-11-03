@@ -215,11 +215,13 @@ Every decision gets an owner and a deadline.
 
 | Role | Responsibility | Owner |
 |---|---|---|
-| Product and customer research | Interviews, requirements, priorities | To assign |
-| Engineering | Platform, booking system, integrations | To assign |
-| Supply and sales | Onboarding providers and anchor customers | To assign |
-| Operations | Request handling, provider follow-up, outcome tracking | To assign |
-| Legal and finance | Terms, GDPR, company set-up | To assign |
+| Product and customer research | Interviews, requirements, priorities | Founder (decision log #4) |
+| Engineering | Platform, booking system, integrations | Founder (decision log #4) |
+| Supply and sales | Onboarding providers and anchor customers | Founder (decision log #4) |
+| Operations | Request handling, provider follow-up, outcome tracking | Founder (decision log #4) |
+| Legal and finance | Terms, GDPR, company set-up | Founder (decision log #4) |
+
+Owners settled 2026-11-03 per decision log #4 (solo founder + AI-assisted build): the founder wears product, research, supply, operations and legal; engineering is AI-assisted under the founder.
 
 No substantial development starts until responsibility for delivering and operating the pilot is clear.
 
