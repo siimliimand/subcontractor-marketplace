@@ -62,3 +62,37 @@
   completed-booking grounding, else it refuses with `insufficient_grounding`.
 - New audit actions live in `src/worker/events.ts` (calendar, reviews,
   provider users, pilot, planner, audit_exported, catalog).
+
+## GitHub push transport (SUBC-007, 2026-11-03)
+
+- **SSH to github.com is broken on the fusion host** (`Host key verification
+  failed`); it silently killed all pushes after 2026-10-18 — six landings
+  (through c149faa) never reached GitHub and Actions produced zero runs.
+  Do NOT "fix" this by accepting unknown host keys or disabling host-key
+  checking.
+- **`origin` is now HTTPS** (`https://github.com/siimliimand/subcontractor-marketplace.git`)
+  with the gh credential helper. Two-command re-apply after a host rebuild:
+
+  ```bash
+  gh auth setup-git
+  git remote set-url origin https://github.com/siimliimand/subcontractor-marketplace.git
+  ```
+
+  Verify with `git ls-remote origin refs/heads/main` (no prompt, prints the sha).
+- **Post-merge push of `main` + currency check is REQUIRED after every landing**
+  until push automation exists:
+
+  ```bash
+  git push origin main
+  node scripts/verify-ci-currency.mjs
+  ```
+
+  The guard asserts local main == origin/main == newest completed Actions run
+  head_sha and that the run concluded success; any FAIL line names the broken
+  link. `ci.yml` also takes `workflow_dispatch` for manual backfills
+  (`gh workflow run ci.yml --ref main`). Never force-push, and never push a
+  `fusion/*` task branch to `main`.
+- The gh OAuth token lives in the gh config (`gh auth status` to verify, values
+  redacted) and the credential helper is written to the home git config —
+  **never echo or commit token values**; same rule as the Cloudflare token
+  above. No credential material belongs in the repo working tree.
