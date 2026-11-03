@@ -56,7 +56,7 @@ flowchart LR
 
 | Week | Task |
 |---|---|
-| 1 | Write interview guides (questions in [`details/07-gtm-and-liquidity.md`](details/07-gtm-and-liquidity.md) Phase 1); build interview pipeline to 10 PMs + 15 contractors |
+| 1 | Write interview guides (questions in [`details/07-gtm-and-liquidity.md`](details/07-gtm-and-liquidity.md) Phase 1); build interview pipeline to 10 PMs + 15 contractors → `docs/phase0/interview-guides.md` |
 | 2–3 | Run interviews; score each on the 6-dimension scorecard with evidence; log concrete recent examples, never hypotheticals |
 | 4 | Synthesis: problem-severity map, segment confirmation or pivot signal, baselines for every pilot target in 08; go/no-go recommendation |
 

@@ -226,7 +226,7 @@ No substantial development starts until responsibility for delivering and operat
 ## 14. Next 30 days
 
 - [x] Hold the partner meeting and settle the decisions above → decision log, 18 Oct 2026
-- [ ] Write interview guides for project managers and contractors
+- [x] Write interview guides for project managers and contractors → `docs/phase0/interview-guides.md`
 - [ ] Complete the interviews (~10 PMs, ~15 contractors)
 - [ ] Research existing Estonian portals, procurement tools and scheduling software
 - [x] Check access and terms for the public registers listed in section 6 → `docs/phase0/register-findings.md`
