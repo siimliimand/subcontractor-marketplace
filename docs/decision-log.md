@@ -296,3 +296,36 @@ Evidence (2026-11-04, SUBC-020, worktree `subc-020`):
 3. Until the cron is repaired, flush after any landing by running `node scripts/push-main-when-ahead.mjs` — per `agents.md`, a landing is not complete until it exits 0. (This entry's own doc commits will be one such flush.)
 4. Optional root-cause follow-up: determine why the agent-side landing gate was not run after the 2026-11-04 landings (`1fb4051`, `dec83346`, `f07eb93`) — the engine merge flow lives outside this repo per the SUBC-008 decision entry, so the gap is engine-side.
 
+## Origin branch cleanup — 2026-11-04 (SUBC-019)
+
+**Decision: the leftover origin branch `fusion/subc-011` (`d6f932f`) is deleted; origin now
+hosts exactly one branch, `main`, restoring the agents.md convention (SUBC-007/SUBC-008 notes)
+that `fusion/*` task branches never live on origin.** Owner: founder. Reversibility: the
+original commit stays pinned locally by the tag `rescue/fusion-subc-011` (never pushed); if
+the branch is ever needed again, recreate it with `git push origin
+rescue/fusion-subc-011:refs/heads/fusion/subc-011`.
+
+Provenance: `fusion/subc-011` was the only `fusion/*` ref ever pushed to origin, pushed as
+part of the 2026-11-04 PR #3 manual rescue — the then-active `ci-merge-gate-pilot` ruleset
+declined the engine's direct push of SUBC-011 to `main`, so siimliimand manually opened PR #3
+and squash-merged it (`0645df5`, merged 2026-11-04T08:09:56Z), and the branch push was part
+of that rescue. The branch lingered afterwards as rescue evidence; the SUBC-014 evidence pack
+surfaced it (cf. the SUBC-014 entry above: "PR #3 (SUBC-011, squash-merged 2026-11-04T08:09:56Z
+→ `0645df5`) … (branch still on origin as the rescue leftover)"). This entry records that it
+is now deleted, per the repo rule that internal work branches never live on the remote.
+
+Safety evidence (2026-11-04, SUBC-019, worktree `subc-019` — deletion ran only after every
+gate passed live; PR #3 and all legacy probe artifacts untouched):
+
+| Factor | Observation | Implication |
+|---|---|---|
+| Gate A — merge landed | `git merge-base --is-ancestor 0645df52a941e1baa61922d8b784a705acd39bef origin/main` → exit 0 | The rescue content is permanently in origin/main history; the branch carried no unmerged work |
+| Gate B — zero content loss | `git diff --shortstat d6f932f929a7707a87f39b0a1ab823e17251c291 0645df52a941e1baa61922d8b784a705acd39bef` → empty output | The branch tip tree is byte-identical to the squash commit; deleting the ref loses zero content |
+| Gate C — PR closed out (soft) | `gh pr view 3 --repo siimliimand/subcontractor-marketplace --json state,mergedAt,mergeCommit` → `MERGED`, mergeCommit oid `0645df52…`, `mergedAt 2026-11-04T08:09:56Z` | PR #3 is closed out; its record (and `refs/pull/3/head`) remains readable on GitHub after head deletion |
+| Pre-delete heads | `git ls-remote --heads origin` → exactly two: `refs/heads/fusion/subc-011` `d6f932f929a7707a87f39b0a1ab823e17251c291` (exact expected SHA; the ONLY `fusion/*` head repo-wide) + `refs/heads/main` `61f81e8b…` | Expected state per the state matrix; no other `fusion/*` head existed to expand scope |
+| Deletion | `git push origin --delete fusion/subc-011` → `- [deleted] fusion/subc-011` | The single sanctioned remote mutation; no force, no other refspec |
+| Post-delete heads | `git ls-remote --heads origin` → exactly one head: `refs/heads/main` `61f81e8b227e77a820bd0dc153a9b08b5363167e` | Origin matches the one-branch convention again; nothing can build, deploy, or PR from a stale leftover |
+| Full-ref snapshot diff | `git ls-remote origin` after minus before = exactly the removed `refs/heads/fusion/subc-011` line (`HEAD`, `refs/heads/main`, `refs/pull/1/3/5/head` byte-identical) | No tag, PR ref, or other namespace was touched by the deletion |
+| Local pin tag | `git tag rescue/fusion-subc-011 d6f932f…` — local only, never pushed; `git rev-parse rescue/fusion-subc-011` → `d6f932f929a7707a87f39b0a1ab823e17251c291` | The commit is gc-safe and the deletion is fully reversible via the recreate command above |
+| PR #3 post-delete | `gh pr view 3 --json state` → still `MERGED`; no comment, edit, or close was made | The rescue evidence itself is preserved verbatim |
+
