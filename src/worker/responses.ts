@@ -1,6 +1,5 @@
 import { and, eq } from "drizzle-orm";
-import { drizzle, type DrizzleD1Database } from "drizzle-orm/d1";
-import type { BatchItem } from "drizzle-orm/batch";
+import type { DrizzleD1Database } from "drizzle-orm/d1";
 import { companies, requests, responses } from "./db/schema";
 import { auditEventStatement, type EventChannel } from "./events";
 import type { ResponseType } from "./config";

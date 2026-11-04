@@ -2,7 +2,7 @@ import { drizzle } from "drizzle-orm/d1";
 import { sql } from "drizzle-orm";
 import type { AppEnv } from "../app";
 import { Hono } from "hono";
-import { TRADE_PILOT_MINIMUMS, type Trade } from "../config";
+import { TRADE_PILOT_MINIMUMS } from "../config";
 
 export const dashboardRouter = new Hono<AppEnv>();
 

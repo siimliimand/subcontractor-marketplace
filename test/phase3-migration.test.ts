@@ -93,7 +93,7 @@ async function seedTwoBookings() {
 
 describe("phase 3 migration 0006", () => {
   it("UPDATE trigger blocks a reschedule into an occupied window", async () => {
-    const { first, second } = await seedTwoBookings();
+    const { first: _first, second } = await seedTwoBookings();
     // Move the second booking back onto the first booking's window.
     await expect(
       env.DB.prepare("UPDATE bookings SET startDate = ?, endDate = ? WHERE id = ?")

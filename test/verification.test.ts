@@ -9,9 +9,7 @@ import {
   requests,
   responses,
   services,
-  users,
 } from "../src/worker/db/schema";
-import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
 import { createApp } from "../src/worker/app";
 
@@ -49,7 +47,6 @@ async function createProvider() {
 }
 
 async function insertVerifications(companyId: string) {
-  const staff = (await db().select().from(users).limit(1))[0]!;
   const now = new Date().toISOString();
   await db().insert(companyVerifications).values([
     {

@@ -673,7 +673,6 @@ providersRouter.get("/:id/regions", async (c) => {
  * set is valid — the provider becomes coverage-optional (eligible everywhere). */
 providersRouter.put("/:id/regions", async (c) => {
   const db = drizzle(c.env.DB);
-  const user = c.get("user");
   const id = c.req.param("id");
   const company = (await db.select().from(companies).where(eq(companies.id, id)).limit(1))[0];
   if (!company) return c.json(providerMessage("not_found"), 404);

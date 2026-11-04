@@ -1,8 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { SELF, env } from "cloudflare:test";
 import { makeAccessToken, accessHeaders } from "./helpers/access";
-import { availabilityDeclarations, auditEvents, companies, users } from "../src/worker/db/schema";
-import { eq } from "drizzle-orm";
+import { availabilityDeclarations, auditEvents, companies } from "../src/worker/db/schema";
 import { drizzle } from "drizzle-orm/d1";
 import { freshness, summariseDeclarations } from "../src/worker/availability";
 

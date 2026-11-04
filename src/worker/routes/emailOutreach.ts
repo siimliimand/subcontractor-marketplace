@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { drizzle } from "drizzle-orm/d1";
 import { eq } from "drizzle-orm";
-import { outreachEntries, requests } from "../db/schema";
+import { requests } from "../db/schema";
 import type { AppEnv } from "../app";
 import { DailyLimitError, sendOutreachEmailBatch } from "../email/sender";
 

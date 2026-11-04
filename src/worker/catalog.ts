@@ -1,4 +1,3 @@
-import { eq } from "drizzle-orm";
 import type { DrizzleD1Database } from "drizzle-orm/d1";
 import { regions, trades } from "./db/schema";
 import { PILOT_TRADES, TRADE_PILOT_MINIMUMS, type Trade } from "./config";

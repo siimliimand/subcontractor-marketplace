@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { BatchItem } from "drizzle-orm/batch";
 import { drizzle } from "drizzle-orm/d1";
 import {
@@ -409,7 +409,6 @@ bookingRouter.get("/requests/:id/holds", async (c) => {
 
 bookingRouter.post("/holds/:id/release", async (c) => {
   const db = drizzle(c.env.DB);
-  const user = c.get("user");
   const id = c.req.param("id");
   if (!holdsEnabled(c.env))
     return c.json({ error: "holds_disabled: BOOKING_HOLDS_ENABLED is off" }, 403);

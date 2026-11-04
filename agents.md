@@ -161,3 +161,78 @@ trigger is now automated.
   `ghp_`/`gho_`/`github_pat_`/`x-access-token:` material before it is written;
   no credential material in commits. The script works from the primary
   checkout or any linked fusion worktree (git shared refs).
+
+## CI merge gate and failure alerts (SUBC-013, 2026-11-04)
+
+Extends the SUBC-007 transport notes and the SUBC-008 auto-push subsection
+above; see also the decision-log entries “CI gate decision — 3 November
+2026 (SUBC-007)” and “CI merge gate, lint baseline, and failure alerts —
+2026-11-04 (SUBC-013, supersedes SUBC-007)”.
+
+- **Lint is part of every landing.** The repo has an ESLint 9 flat config
+  (`eslint.config.mjs`) and a `lint` script; CI runs `npm run lint` before
+  build/typecheck/test in the single `test` job (job id unchanged — the
+  ruleset and the retired-sharding decision both bind to it). Run
+  `npm run lint` locally before landing; zero errors is the bar (warnings
+  from `react-hooks/exhaustive-deps` do not fail). Per-file
+  `eslint-disable` comments are forbidden — relax a rule only in
+  `eslint.config.mjs` with a justification comment AND a decision-log record.
+  On the fusion host, run npm installs with `NODE_ENV=development` (the agent
+  shell exports `NODE_ENV=production`, which makes npm silently omit
+  devDependencies).
+- **CI fires on every push (any branch) and every PR.** `workflow_dispatch`
+  remains the manual backfill (`gh workflow run ci.yml --ref main`). Runs are
+  per-ref concurrent (a newer push to the same ref cancels the stale run);
+  cancelled runs never alert.
+- **PR merges into `main` are gated.** Ruleset `ci-merge-gate-pilot` (id
+  26516182) requires the `test` check (non-strict) plus `non_fast_forward`
+  and `deletion`, for `refs/heads/main` only. **Direct pushes to main are
+  NOT blocked** — the landing flow (engine merge + `push-main-when-ahead`)
+  keeps working; only PR merges wait for a green `test`. Do not add a
+  `pull_request` rule or strict required checks while the direct-push
+  landing model is in use. Re-evaluate at pilot end.
+- **A `ci-failure` issue means CI failed somewhere.** The `notify` job
+  (`if: failure()`, `GITHUB_TOKEN` only, no secrets) creates it on the first
+  failure and comments on it for subsequent failures (one open issue at a
+  time). Triage the linked run, fix, and **close the issue with a comment —
+  never delete it** (it is the alert history). The `ci-failure` label is
+  managed by the workflow; no setup needed.
+- **Founder notification layers:** GitHub's default failure email to the push
+  actor (the siimliimand token drives all pushes) plus the repo watch
+  subscription — **confirmed active 2026-11-04** (`PUT /subscription`
+  succeeded; the earlier 404 was the pre-refresh token). If notifications
+  ever lapse: click “Watch” on the repo, or
+  `gh auth refresh -h github.com -s notifications` then re-run the PUT with
+  typed `-F` flags (`-f` string-fields 422 spuriously).
+- **Workflow-scope push constraint (still true):** pushes whose range touches
+  `.github/workflows/*` need the gh token's `workflow` scope. It was granted
+  2026-11-04 (the founder ran the one-time `gh auth refresh -s workflow`);
+  if a workflow-file landing is ever remote-rejected again, re-run that
+  refresh as the siimliimand identity — there is no API workaround (the
+  low-level git-data route was considered and rejected at SUBC-008).
+- **Probe re-verification procedure** (distilled from the 2026-11-04 live
+  probes; rerun whenever the gate's wiring is questioned):
+  1. `git push origin HEAD:refs/heads/ci-gate-probe/<yyyymmdd>` from a
+     clean tip — expect a green `push` run whose `test` job shows
+     `Run npm run lint` (use a temp worktree or plumbing for extra probe
+     commits; task worktrees refuse commits to non-task branches).
+  2. Add a deliberately failing test on the probe branch only, push —
+     expect a failing `push` run, a `notify` job success, and an open
+     `ci-failure` issue.
+  3. `gh pr create --draft --base main --head ci-gate-probe/<yyyymmdd>` —
+     expect a failing `pull_request` run that COMMENTS on the same issue
+     (dedupe) and `gh pr view <n> --json mergeStateStatus` reporting
+     `BLOCKED` while the check fails; a merge attempt is refused.
+  4. Cleanup is mandatory: close the PR and the issue with probe-marker
+     comments, `git push origin --delete ci-gate-probe/<yyyymmdd>`, remove
+     the probe test file everywhere. Never delete runs or issue history.
+     Failing probe runs shadow the main tip in
+     `scripts/verify-ci-currency.mjs` until the next main landing's green
+     run becomes the newest completed run — that is expected and self-heals.
+- **SUBC-008 interplay:** the watchdog and the merge gate are complementary —
+  the watchdog guarantees landings reach origin and go green (pushes are
+  direct, hence unaffected by the ruleset); the ruleset guarantees PR merges
+  cannot bypass a red check. If the watchdog has pushed main, a redundant
+  push is a harmless no-op; never force-push to win a race, and never let
+  local main fall behind origin (that trips the drift alert and blocks all
+  landings).

@@ -79,7 +79,7 @@ briefsRouter.post("/briefs/:id/approve", async (c) => {
   // Staff-edited values go through the same sanitisation as the draft.
   const { draft: final, missing } = validateBrief(finalRaw, await activeTradeSlugs(db));
 
-  const updated = await db
+  await db
     .update(briefProposals)
     .set({
       finalJson: JSON.stringify(final),

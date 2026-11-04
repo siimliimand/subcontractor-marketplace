@@ -63,7 +63,7 @@ export function computeBadges(
     registryActive: registryRow ? badgeFrom(registryRow, opts.mtrEnabled) : null,
     trades: {},
   };
-  for (const [key, row] of latest) {
+  for (const [_key, row] of latest) {
     if (row.type !== "trade_notification" || !row.trade) continue;
     badges.trades[row.trade] = badgeFrom(row, opts.mtrEnabled);
   }

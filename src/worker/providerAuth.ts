@@ -1,5 +1,5 @@
 import type { DrizzleD1Database } from "drizzle-orm/d1";
-import { and, eq, lt, sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { providerUserTokens, providerUsers, type ProviderUserRole } from "./db/schema";
 
 /**

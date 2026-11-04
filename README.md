@@ -77,8 +77,11 @@ is empty.
 
 ## CI
 
-`.github/workflows/ci.yml` runs typecheck, the 267 integration tests and the build on
-every push to `main` and on pull requests. Requires the repo to be pushed to GitHub
+`.github/workflows/ci.yml` runs lint, build, typecheck and the 299 integration tests
+on **every push (any branch)** and on pull requests; failed runs open a `ci-failure`
+issue as an alert, and a `ci-merge-gate-pilot` ruleset gates PR merges into `main`
+on the `test` check (currently **disabled** — parked pending PR-based landing
+support in Fusion). Requires the repo to be pushed to GitHub
 with Actions enabled.
 
 ## Secrets (never committed)
