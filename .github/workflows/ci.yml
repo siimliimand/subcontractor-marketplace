@@ -47,7 +47,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          REF: ${{ github.ref_name }}
+          # SUBC-018: PR runs execute on the merge ref (refs/pull/N/merge),
+          # so ref_name reads "N/merge" — opaque to the founder. Prefer the
+          # pull request's head branch so the alert names the branch the
+          # change lives on; the || fallback keeps push/workflow_dispatch
+          # behavior unchanged. Semantics mirrored by
+          # scripts/ci-alert-branch.mjs. Env mapping only, never interpolated
+          # into run: (fork head refs are attacker-influenced input).
+          REF: ${{ github.event.pull_request.head.ref || github.ref_name }}
           SHA: ${{ github.sha }}
           EVENT: ${{ github.event_name }}
         run: |
