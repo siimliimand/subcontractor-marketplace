@@ -48,6 +48,31 @@ type SupplyRow = {
   met: boolean;
 };
 
+type ProviderDeliveryRow = {
+  companyId: string;
+  legalName: string;
+  contactEmail: string;
+  sent: number;
+  delivered: number;
+  opened: number;
+  bounced: number;
+  skipped: number;
+  bounceRate: number | null;
+  suppressed: boolean;
+};
+
+type EmailDeliveryData = {
+  providers: ProviderDeliveryRow[];
+  totals: {
+    sent: number;
+    delivered: number;
+    opened: number;
+    bounced: number;
+    skipped: number;
+    bounceRate: number | null;
+  };
+};
+
 type EffortData = {
   perRequest: {
     id: string;
@@ -72,6 +97,7 @@ export default function Dashboard() {
   const [supply, setSupply] = useState<SupplyRow[]>([]);
   const [effort, setEffort] = useState<EffortData | null>(null);
   const [weekly, setWeekly] = useState<WeeklyRow[]>([]);
+  const [delivery, setDelivery] = useState<EmailDeliveryData | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -83,12 +109,14 @@ export default function Dashboard() {
       get<SupplyRow[]>("/dashboard/supply"),
       get<EffortData>("/dashboard/effort"),
       get<{ weeks: WeeklyRow[] }>(`/dashboard/weekly${params ? `?${params}` : ""}`),
+      get<EmailDeliveryData>(`/dashboard/email-delivery${params ? `?${params}` : ""}`),
     ])
-      .then(([m, s, e, w]) => {
+      .then(([m, s, e, w, d]) => {
         setMetrics(m);
         setSupply(s);
         setEffort(e);
         setWeekly(w.weeks);
+        setDelivery(d);
       })
       .catch((e) => setError(String(e)));
   }, [from, to]);
@@ -248,6 +276,57 @@ export default function Dashboard() {
               {metrics.email.manualQualified} manual
             </p>
           </div>
+          {delivery && (
+            <div className="overflow-x-auto mt-2">
+              <table className="w-full bg-white rounded border text-xs">
+                <thead className="bg-gray-50 text-left text-gray-600">
+                  <tr>
+                    <th className="p-2">Provider</th>
+                    <th className="p-2">Sent</th>
+                    <th className="p-2">Delivered</th>
+                    <th className="p-2">Opened</th>
+                    <th className="p-2">Bounced</th>
+                    <th className="p-2">Bounce rate</th>
+                    <th className="p-2">Skipped</th>
+                    <th className="p-2">Suppressed</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {delivery.providers.map((p) => (
+                    <tr key={p.companyId} className="border-t">
+                      <td className="p-2 font-medium whitespace-nowrap">{p.legalName}</td>
+                      <td className="p-2">{p.sent}</td>
+                      <td className="p-2">{p.delivered}</td>
+                      <td className="p-2">{p.opened}</td>
+                      <td className="p-2">{p.bounced}</td>
+                      <td className="p-2">{pct(p.bounceRate)}</td>
+                      <td className="p-2">{p.skipped}</td>
+                      <td className="p-2">{p.suppressed ? "Yes" : "No"}</td>
+                    </tr>
+                  ))}
+                  {delivery.providers.length > 0 && (
+                    <tr className="border-t bg-gray-50 font-semibold">
+                      <td className="p-2">Totals</td>
+                      <td className="p-2">{delivery.totals.sent}</td>
+                      <td className="p-2">{delivery.totals.delivered}</td>
+                      <td className="p-2">{delivery.totals.opened}</td>
+                      <td className="p-2">{delivery.totals.bounced}</td>
+                      <td className="p-2">{pct(delivery.totals.bounceRate)}</td>
+                      <td className="p-2">{delivery.totals.skipped}</td>
+                      <td className="p-2">—</td>
+                    </tr>
+                  )}
+                  {delivery.providers.length === 0 && (
+                    <tr>
+                      <td className="p-2 text-gray-400" colSpan={8}>
+                        No email outreach yet.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
         </section>
       )}
 

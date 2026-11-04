@@ -1,7 +1,19 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { SELF, env } from "cloudflare:test";
 import { makeAccessToken, accessHeaders } from "./helpers/access";
-import { auditEvents, companies, requests, services, timeEntries } from "../src/worker/db/schema";
+import { sendOutreachWithStub } from "./helpers/email";
+import { applyEmailLifecycleEvent } from "../src/worker/email/events";
+import {
+  auditEvents,
+  companies,
+  emailSuppressions,
+  emailTokens,
+  outreachEntries,
+  requests,
+  services,
+  timeEntries,
+  users,
+} from "../src/worker/db/schema";
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
 
@@ -221,5 +233,244 @@ describe("funnel dashboard", () => {
     expect(row.manualEvents).toBeGreaterThanOrEqual(2);
     expect(effort.weekly.length).toBeGreaterThan(0);
     expect(effort.weekly[0]!.interventions).toBeGreaterThan(0);
+  });
+});
+
+describe("per-provider email delivery metrics (SUBC-011)", () => {
+  beforeEach(async () => {
+    // Provision the staff user (requireStaff upserts on first auth) — storage
+    // is isolated per test in vitest-pool-workers.
+    await SELF.fetch("https://example.com/api/me", { headers: authHeaders });
+    await db().delete(auditEvents);
+    await db().delete(emailTokens);
+    await db().delete(emailSuppressions);
+    await db().delete(outreachEntries);
+  });
+
+  async function staffUserId(): Promise<string> {
+    const user = (
+      await db().select().from(users).where(eq(users.email, "staff@example.com")).limit(1)
+    )[0];
+    if (!user) throw new Error("staff user not provisioned");
+    return user.id;
+  }
+
+  let deliveryRegCounter = 0;
+
+  async function createProvider() {
+    const res = await SELF.fetch("https://example.com/api/providers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders },
+      body: JSON.stringify({
+        legalName: `OÜ Delivery ${++deliveryRegCounter}`,
+        registrationIdentifier: `reg-delivery-${deliveryRegCounter}-${Math.random()}`,
+        contactEmail: `delivery${deliveryRegCounter}-${Math.random()}@example.com`,
+      }),
+    });
+    return (await res.json()) as { id: string; contactEmail: string; legalName: string };
+  }
+
+  async function createMatchedRequest() {
+    const reqRes = await SELF.fetch("https://example.com/api/requests", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders },
+      body: JSON.stringify({
+        title: `Delivery request ${Math.random()}`,
+        description: "Work",
+        location: "Tallinn",
+        trade: "electrical",
+        startDate: "2026-11-10",
+        crewSize: 2,
+      }),
+    });
+    const request = (await reqRes.json()) as { id: string };
+    for (const to of ["approved", "matched"]) {
+      await SELF.fetch(`https://example.com/api/requests/${request.id}/transition`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders },
+        body: JSON.stringify({ to }),
+      });
+    }
+    return request.id;
+  }
+
+  async function emailDelivery(query = "") {
+    const res = await SELF.fetch(`https://example.com/api/dashboard/email-delivery${query}`, {
+      headers: authHeaders,
+    });
+    expect(res.status).toBe(200);
+    return (await res.json()) as {
+      providers: {
+        companyId: string;
+        legalName: string;
+        contactEmail: string;
+        sent: number;
+        delivered: number;
+        opened: number;
+        bounced: number;
+        skipped: number;
+        bounceRate: number | null;
+        suppressed: boolean;
+      }[];
+      totals: {
+        sent: number;
+        delivered: number;
+        opened: number;
+        bounced: number;
+        skipped: number;
+        bounceRate: number | null;
+      };
+    };
+  }
+
+  it("returns zeroed rows for an empty database", async () => {
+    const data = await emailDelivery();
+    expect(data.providers).toEqual([]);
+    expect(data.totals).toEqual({
+      sent: 0,
+      delivered: 0,
+      opened: 0,
+      bounced: 0,
+      skipped: 0,
+      bounceRate: null,
+    });
+  });
+
+  it("computes per-provider counts, bounce rate, suppression, and totals", async () => {
+    const staffId = await staffUserId();
+
+    // Provider A: one sent email that hard-bounced → suppression row.
+    const a = await createProvider();
+    const requestA = await createMatchedRequest();
+    await sendOutreachWithStub({
+      requestId: requestA,
+      providerIds: [a.id],
+      staffUserId: staffId,
+      staffEmail: "staff@example.com",
+    });
+    await applyEmailLifecycleEvent(drizzle(env.DB), {
+      kind: "bounced",
+      to: a.contactEmail,
+      permanent: true,
+      source: "webhook",
+    });
+
+    // Provider B: two sends — one delivered, one opened.
+    const b = await createProvider();
+    for (const status of ["delivered", "opened"]) {
+      const requestId = await createMatchedRequest();
+      await sendOutreachWithStub({
+        requestId,
+        providerIds: [b.id],
+        staffUserId: staffId,
+        staffEmail: "staff@example.com",
+      });
+      const entry = (
+        await db().select().from(outreachEntries).where(eq(outreachEntries.requestId, requestId))
+      )[0]!;
+      await db()
+        .update(outreachEntries)
+        .set({ emailStatus: status })
+        .where(eq(outreachEntries.id, entry.id));
+    }
+
+    // Provider C: one skipped entry only (suppressed address, never sent).
+    const c = await createProvider();
+    await db().insert(outreachEntries).values({
+      id: crypto.randomUUID(),
+      requestId: (await createMatchedRequest()) as string,
+      companyId: c.id,
+      batchNumber: `E-skip-${Math.random()}`,
+      contactedBy: staffId,
+      channel: "email",
+      emailStatus: "skipped",
+      emailSkippedReason: "email_suppressed",
+      sentAt: new Date().toISOString(),
+    });
+
+    const data = await emailDelivery();
+    const rowA = data.providers.find((p) => p.companyId === a.id)!;
+    const rowB = data.providers.find((p) => p.companyId === b.id)!;
+    const rowC = data.providers.find((p) => p.companyId === c.id)!;
+
+    expect(rowA).toMatchObject({
+      sent: 1,
+      delivered: 0,
+      opened: 0,
+      bounced: 1,
+      skipped: 0,
+      bounceRate: 1,
+      suppressed: true,
+    });
+    expect(rowB).toMatchObject({
+      sent: 2,
+      delivered: 2,
+      opened: 1,
+      bounced: 0,
+      skipped: 0,
+      bounceRate: 0,
+      suppressed: false,
+    });
+    // Skipped-only provider: nothing dispatched → no denominator, no rate.
+    expect(rowC).toMatchObject({
+      sent: 0,
+      delivered: 0,
+      opened: 0,
+      bounced: 0,
+      skipped: 1,
+      bounceRate: null,
+      suppressed: false,
+    });
+
+    // Rows ordered by bounced DESC, sent DESC.
+    expect(data.providers.map((p) => p.companyId)).toEqual([a.id, b.id, c.id]);
+
+    // Totals: skipped excluded from the sent denominator.
+    expect(data.totals).toEqual({
+      sent: 3,
+      delivered: 2,
+      opened: 1,
+      bounced: 1,
+      skipped: 1,
+      bounceRate: 1 / 3,
+    });
+  });
+
+  it("filters rows by from/to on sentAt", async () => {
+    const staffId = await staffUserId();
+    const a = await createProvider();
+    const requestA = await createMatchedRequest();
+    await sendOutreachWithStub({
+      requestId: requestA,
+      providerIds: [a.id],
+      staffUserId: staffId,
+      staffEmail: "staff@example.com",
+    });
+    const entry = (
+      await db().select().from(outreachEntries).where(eq(outreachEntries.requestId, requestA))
+    )[0]!;
+    // Backdate A's entry into January.
+    await db()
+      .update(outreachEntries)
+      .set({ sentAt: "2026-01-15T10:00:00.000Z" })
+      .where(eq(outreachEntries.id, entry.id));
+
+    const b = await createProvider();
+    const requestB = await createMatchedRequest();
+    await sendOutreachWithStub({
+      requestId: requestB,
+      providerIds: [b.id],
+      staffUserId: staffId,
+      staffEmail: "staff@example.com",
+    });
+
+    const all = await emailDelivery();
+    expect(all.providers).toHaveLength(2);
+
+    const recent = await emailDelivery("?from=2026-06-01");
+    expect(recent.providers.map((p) => p.companyId)).toEqual([b.id]);
+
+    const oldOnly = await emailDelivery("?from=2026-01-01&to=2026-02-01");
+    expect(oldOnly.providers.map((p) => p.companyId)).toEqual([a.id]);
   });
 });
