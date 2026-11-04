@@ -96,3 +96,68 @@
   redacted) and the credential helper is written to the home git config —
   **never echo or commit token values**; same rule as the Cloudflare token
   above. No credential material belongs in the repo working tree.
+
+### Auto-push on landing (SUBC-008, 2026-11-03)
+
+This subsection supersedes the manual two-command procedure above. The push
+transport itself (HTTPS remote + gh credential helper) is unchanged — only the
+trigger is now automated.
+
+- **Mechanism: a scheduled currency check that pushes when ahead** (option b of
+  the SUBC-008 acceptance; the full choice rationale and rejected alternatives
+  are recorded in `docs/decision-log.md`, "Auto-push mechanism decision —
+  3 November 2026 (SUBC-008)"). `scripts/push-main-when-ahead.mjs` fetches
+  `origin main`, computes ahead/behind, and acts: **ahead → `git push origin
+  main` → poll Actions for a COMPLETED run on the pushed tip → chain
+  `scripts/verify-ci-currency.mjs`**; **current → no-op**; **behind/diverged →
+  refuse loudly, never auto-merge, never force**. Pure decision logic lives in
+  `scripts/ci-currency-lib.mjs` (unit-tested in
+  `test/ci-currency-guard.test.ts`).
+- **Why not a merger-path hook or a git hook:** the Fusion engine's merge flow
+  lives outside this repository (engine-side, verified 2026-11-03 — see the
+  decision-log entry), and a `post-merge` git hook is invisible, unverifiable
+  host state on every checkout. A repo-shipped script with three triggers
+  (cron tick, landing gate, manual) is inspectable and testable.
+- **Landing gate (ACTIVE NOW):** a landing on `main` is **NOT complete until
+  `node scripts/push-main-when-ahead.mjs` exits 0** (pushed + green run on the
+  tip). A non-zero exit is a **landing failure** — treat it exactly like a
+  failed check: do not start the next merge, surface it in the task log.
+  `--check` is the read-only probe (`ahead/behind` report; exit 1 on drift,
+  never pushes, never touches the alert file).
+- **Scheduled trigger (10-min tick) — one-time operator install.** The fusion
+  user's crontab spool is not writable by agent identities on this host
+  (verified 2026-11-03: `crontab -l` → `Permission denied`; no sudo; crond
+  itself is active), so the line is installed once by the operator and then
+  survives reboots. Re-apply after any host rebuild, together with SUBC-007's
+  two transport commands:
+
+  ```bash
+  gh auth setup-git
+  git remote set-url origin https://github.com/siimliimand/subcontractor-marketplace.git
+  mkdir -p ~/.local/state/ci-currency
+  ( crontab -l 2>/dev/null; echo '*/10 * * * * cd /var/www/code.webuilder.dev/subcontractor-marketplace && /usr/local/bin/node scripts/push-main-when-ahead.mjs >> /home/fusion/.local/state/ci-currency/cron.log 2>&1' ) | crontab -
+  ```
+
+  `/usr/local/bin/node` is deliberate: cron's default PATH lacks
+  `/usr/local/bin`, and `/usr/bin/node` does not exist on this host.
+- **Drift response:** if `~/.local/state/ci-currency/alert` exists, or
+  `node scripts/verify-ci-currency.mjs` exits non-zero, **create an urgent
+  task and merge NO further work onto `main` until currency is restored**
+  (local main == origin/main == newest green run). The alert file carries the
+  timestamp, reason, and the exact next manual action. Runtime state
+  (`auto-push.log`, `cron.log`, `alert`, `lock/`) lives under the fusion
+  user's `~/.local/state/ci-currency` — never inside the tracked tree.
+- **Credential scope caveat (live 2026-11-03):** the gh OAuth token has scopes
+  `admin:public_key, gist, read:org, repo` — **no `workflow` scope**. GitHub
+  refuses such tokens to push any range touching `.github/workflows/*`
+  (observed: push of main containing SUBC-007's `ci.yml` edit was remote-
+  rejected). Ordinary landings push fine. One-time fix when a workflow-file
+  landing is stuck: run `gh auth refresh -h github.com -s workflow` as the
+  siimliimand identity (browser/device step), then re-run
+  `node scripts/push-main-when-ahead.mjs`.
+- **Guarantees:** only `refs/heads/main` is ever pushed (hardcoded single
+  refspec + `assertMainRef`; unknown argv refused); `fusion/*` task branches
+  are NEVER pushed; never `--force`; every log/alert line is scrubbed of
+  `ghp_`/`gho_`/`github_pat_`/`x-access-token:` material before it is written;
+  no credential material in commits. The script works from the primary
+  checkout or any linked fusion worktree (git shared refs).
