@@ -1,8 +1,9 @@
 # 0.5 — Analytics Event Schema & Tracking Plan
 
 **Status:** Approved-by-construction — this documents what is live in the cockpit
-(`src/worker/events.ts`) and what the remaining phases must add. Per plan §0.5 the schema
-existed before customer-facing product code.
+(`src/worker/events.ts`). All 13 funnel events below are live (verified 2026-11-03);
+the table is a status record, not a backlog. Per plan §0.5 the schema existed before
+customer-facing product code.
 
 ## Store decision
 
