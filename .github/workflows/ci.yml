@@ -45,21 +45,24 @@ jobs:
       - name: Alert founder via ci-failure issue
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           REF: ${{ github.ref_name }}
           SHA: ${{ github.sha }}
           EVENT: ${{ github.event_name }}
         run: |
           set -eu
-          gh label create ci-failure --color d73a4a --force
+          # No checkout in this job: every gh call targets the repo explicitly
+          # (gh cannot infer it from a git remote without a working tree).
+          gh label create ci-failure --color d73a4a --force -R "${REPO}"
           body="CI failed on ${REF} (event: ${EVENT})
           Commit: ${SHA}
           Run: ${RUN_URL}"
-          issue=$(gh issue list --label ci-failure --state open --json number --jq '.[0].number')
+          issue=$(gh issue list --label ci-failure --state open --json number --jq '.[0].number' -R "${REPO}")
           if [ -n "${issue}" ]; then
             echo "Open ci-failure issue #${issue} exists — commenting instead of creating."
-            gh issue comment "${issue}" --body "${body}"
+            gh issue comment "${issue}" --body "${body}" -R "${REPO}"
           else
             echo "No open ci-failure issue — creating one."
-            gh issue create --title "CI failed on ${REF}" --label ci-failure --body "${body}"
+            gh issue create --title "CI failed on ${REF}" --label ci-failure --body "${body}" -R "${REPO}"
           fi
