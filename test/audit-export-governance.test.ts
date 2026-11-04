@@ -143,7 +143,7 @@ describe("erasure covers phase-4 artifacts", () => {
       headers: { "Content-Type": "application/json", ...authHeaders },
       body: JSON.stringify({ email: "personal@firm.ee", role: "owner" }),
     });
-    const pu = (await userRes.json()) as { id: string };
+    await userRes.json();
 
     // A review with text (booking id is opaque here — reviews FK to bookings;
     // use a real booking via direct insert with real parents skipped by

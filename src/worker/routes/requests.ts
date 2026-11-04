@@ -16,13 +16,12 @@ import {
   requests,
   responses,
   timeEntries,
-  users,
 } from "../db/schema";
 import { freshness } from "../availability";
 import type { AppEnv } from "../app";
 import { auditEventStatement, type EventAction } from "../events";
 import { type RequestStatus, type Trade } from "../config";
-import { activeTradeSlugs, isCatalogRegion, isKnownCatalogTrade } from "../catalog";
+import { activeTradeSlugs, isCatalogRegion } from "../catalog";
 import { canTransition, PRE_BOOKED_STATUSES } from "../lifecycle";
 import { buildComparison } from "../comparison";
 
@@ -64,16 +63,6 @@ function requiredFieldsPresent(r: {
   if (!r.startDate) missing.push("startDate");
   if (!r.crewSize) missing.push("crewSize");
   return missing;
-}
-
-async function getRequestOr404(c: any, id: string) {
-  const db = drizzle(c.env.DB);
-  const row = (await db.select().from(requests).where(eq(requests.id, id)).limit(1))[0];
-  if (!row) {
-    await c.json({ error: "not_found" }, 404);
-    return null;
-  }
-  return row;
 }
 
 requestsRouter.get("/", async (c) => {

@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull, ne } from "drizzle-orm";
+import { and, eq, isNull, ne } from "drizzle-orm";
 import type { DrizzleD1Database } from "drizzle-orm/d1";
 import {
   availabilityDeclarations,
@@ -69,8 +69,8 @@ export async function selectCandidates(
   // Phase 4: region coverage map — a request with a declared region restricts
   // candidates to providers that cover it or declared no coverage at all.
   const region = (request as { region?: string | null }).region ?? null;
-  let covering = new Set<string>();
-  let hasAnyCoverage = new Set<string>();
+  const covering = new Set<string>();
+  const hasAnyCoverage = new Set<string>();
   if (region) {
     const allCoverage = await db.select().from(serviceRegions);
     for (const r of allCoverage) {

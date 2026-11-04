@@ -1,6 +1,6 @@
 import { and, eq, sql } from "drizzle-orm";
 import type { DrizzleD1Database } from "drizzle-orm/d1";
-import { auditEvents, pilotAgreements, requests } from "./db/schema";
+import { pilotAgreements } from "./db/schema";
 
 /**
  * Phase 4 monetization pilot (details/09): the fixed rule — listing and

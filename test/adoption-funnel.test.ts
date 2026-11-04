@@ -134,7 +134,7 @@ async function submitAccept(token: string): Promise<string> {
   return await res.text();
 }
 
-const promptedEvents = (companyId: string) =>
+const promptedEvents = (_companyId: string) =>
   db()
     .select()
     .from(auditEvents)

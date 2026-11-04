@@ -105,15 +105,6 @@ describe("token accept and login", () => {
     ownerUserId = ((await res.json()) as { id: string }).id;
   });
 
-  async function inviteToken(userId: string): Promise<string> {
-    const { raw } = await issueProviderToken(db(), {
-      userId,
-      purpose: "provider_invite",
-      secret: SECRET,
-    });
-    return raw;
-  }
-
   it("accept flow activates the user and issues a working session", async () => {
     const raw = await issueProviderToken(db(), {
       userId: ownerUserId,

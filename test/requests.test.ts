@@ -10,7 +10,6 @@ import {
   requests,
   requestTrades,
   responses,
-  users,
 } from "../src/worker/db/schema";
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";

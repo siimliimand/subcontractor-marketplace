@@ -15,7 +15,6 @@ import {
   services,
   users,
 } from "../src/worker/db/schema";
-import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
 
 const db = () => drizzle(env.DB);
@@ -132,7 +131,7 @@ const detail = async (requestId: string) =>
 describe("reschedule: propose → confirm → record", () => {
   it("proposes, confirms (booking moves), retains history, audits", async () => {
     const ctx = await createProviderWithResponse();
-    const { bookingId } = await bookIt({ request: ctx.request, response: ctx.response });
+    await bookIt({ request: ctx.request, response: ctx.response });
 
     const propRes = await SELF.fetch(
       `https://example.com/api/requests/${ctx.request}/bookings/reschedule`,
@@ -183,7 +182,7 @@ describe("reschedule: propose → confirm → record", () => {
 
   it("rejects a proposal and leaves the booking unchanged", async () => {
     const ctx = await createProviderWithResponse();
-    const { bookingId } = await bookIt({ request: ctx.request, response: ctx.response });
+    await bookIt({ request: ctx.request, response: ctx.response });
 
     const proposal = (await (
       await SELF.fetch(`https://example.com/api/requests/${ctx.request}/bookings/reschedule`, {
@@ -240,7 +239,7 @@ describe("reschedule: propose → confirm → record", () => {
       }),
     });
     const { response: resp2 } = (await respRes.json()) as { response: { id: string } };
-    const secondBooking = await bookIt(
+    await bookIt(
       { request: second.id, response: resp2.id },
       { startDate: "2026-11-20", endDate: "2026-11-28", workersCount: 2 },
     );

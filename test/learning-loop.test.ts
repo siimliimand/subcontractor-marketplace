@@ -284,7 +284,7 @@ describe("runtime weights", () => {
 
 describe("post-hoc explainability data", () => {
   it("stores the full factor breakdown readable from the outreach entry", async () => {
-    const provider = await createProvider();
+    await createProvider();
     const request = await createRequest();
     await matchAndGetFactors(request.id);
 

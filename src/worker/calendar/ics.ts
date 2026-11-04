@@ -154,7 +154,7 @@ export function parseIcsBusy(text: string, now: Date): ParseResult {
       return;
     }
     eventCount++;
-    let startMs = parseUtc(startParsed.utc);
+    const startMs = parseUtc(startParsed.utc);
     let endMs: number;
     if (endIso) {
       const endParsed = parseIcsDate(endIso);

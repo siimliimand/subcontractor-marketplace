@@ -4,7 +4,7 @@ import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
 import { makeAccessToken, accessHeaders } from "./helpers/access";
 import { sendOutreachWithStub, stubSendEnv } from "./helpers/email";
-import { DailyLimitError, sendOutreachEmailBatch } from "../src/worker/email/sender";
+import { sendOutreachEmailBatch } from "../src/worker/email/sender";
 import {
   auditEvents,
   companies,

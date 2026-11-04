@@ -10,11 +10,10 @@ import {
   holds,
   outreachEntries,
   requests,
-  requestTrades,
   responses,
   services,
 } from "../src/worker/db/schema";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
 import { createApp } from "../src/worker/app";
 

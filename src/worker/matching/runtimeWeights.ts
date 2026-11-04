@@ -1,4 +1,4 @@
-import { desc, eq, sql } from "drizzle-orm";
+import { desc, sql } from "drizzle-orm";
 import type { DrizzleD1Database } from "drizzle-orm/d1";
 import { matchWeights } from "../db/schema";
 import {
