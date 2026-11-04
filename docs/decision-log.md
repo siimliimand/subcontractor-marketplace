@@ -610,3 +610,65 @@ dry-run bundle now makes drift visible before any write path); or SUBC-012's
 TTJA licence confirmation, which remains the gate for badge display
 (`MTR_BADGES_ENABLED`) — importing is safe, displaying is still not.
 
+## Operator cron re-issued — 2026-11-05 (SUBC-032)
+
+**Decision: the */10 operator cron stays the sanctioned always-on flush
+trigger, and its installation card is re-issued as one canonical,
+self-contained document — `docs/operator-ci-currency-cron.md` — now with
+the SUBC-028 acceptance tooling (`scripts/verify-landing-gate.mjs`) built
+into its post-install sequence. The gate-at-landing alternative is recorded
+as ALREADY SHIPPED (the "Landing checklist (SUBC-028)" in `agents.md` §
+"Auto-push on landing") but NOT a replacement: engine-side squash landings
+occur outside any agent session, and the single-writer landing contract's
+pending-landing semantics (item 3) require an always-on trigger to publish
+them. Cron repair therefore remains operator-owned (SUBC-020 action item 1
+stands — the crontab spool denies agent identities by design), and CI-side
+enforcement stays rejected per the SUBC-028 entry (CI can never observe a
+push that never happened).**
+
+What shipped (documentation only — no script, workflow, or test file
+changed; SUBC-027 owns gate-script internals): the canonical operator card
+`docs/operator-ci-currency-cron.md` (prerequisites, the exact four-command
+install block reproduced byte-identical, the `/usr/local/bin/node` rationale,
+the numbered four-step post-install acceptance sequence citing each expected
+OK line form, drift/alert response, rollback, host-rebuild re-apply, and
+references); the re-issue status appended to the Scheduled trigger bullet in
+`agents.md` § "Auto-push on landing (SUBC-008)" pointing at the card as the
+operator's single entry point; and this entry. The SUBC-020 entry above
+stays untouched as immutable history.
+
+Evidence (2026-11-05, SUBC-032, worktree `subc-032` — live Step 0 probes):
+
+| Factor | Observation | Implication |
+|---|---|---|
+| State directory | `~/.local/state/ci-currency` holds ONLY `auto-push.log` (12,005 bytes; 74 newline-terminated lines, 72 non-empty); `cron.log` ABSENT; no `alert`, no `lock/` | The crontab redirect creates `cron.log` on any firing → the */10 entry has fired ZERO times since install; ≈66 */10 slots elapsed between the SUBC-020-era last manual noop (2026-11-04T09:56Z) and this probe (host clock 2026-11-04T21:02Z) — the cron was dead through all of them |
+| Last landing evidence | auto-push.log tail: push of tip `9a749b4461886aff0d2723aab97cfc5274a43be5` at 2026-11-04T20:33:56Z → Actions run #29 id=41907815753 (event=push, conclusion=success) → chained verify-ci-currency OK (20:35:50Z) | Landing evidence is MANUAL-only (the SUBC-031 flush); no scheduled-tick line exists anywhere in the log |
+| Recurring cost (confirmed) | The SUBC-026 landing (`50433302`) and the SUBC-029 landing (`9a749b44`) both sat unpublished on local main until SUBC-031 manually ran the gate on 2026-11-04 | SUBC-020's prediction held: without the cron, every landing needs a manual flush session |
+| Spool denial (re-probed) | `crontab -l` → `crontabs/fusion/: fopen: Permission denied` (exit 1) | Agent identities still cannot read or write the crontab — installation is operator-side by design; the documented card is the deliverable |
+| Scheduler + toolchain alive | `pgrep -x cron` → pid 1463666; node v22.14.0, git 2.53.0; gh 2.101.0 responds from the worktree (not on the host probed-command list — recorded with that caveat) | crond will run the line the moment the operator installs it; the card's prerequisites are verifiable live |
+| Worktree currency | branch `fusion/subc-032` @ `9a749b4461886aff0d2723aab97cfc5274a43be5` == origin/main (`git ls-remote`), 0/0 ahead-behind, clean tree | The docs record the live tree state; Step 1 (76634c5) and Step 2 (6e7a51d) landed before this entry |
+
+Canonical install block (byte-identical to `docs/operator-ci-currency-cron.md`
+and `agents.md` § "Auto-push on landing" — verified by fixed-string grep in
+Step 4):
+
+```bash
+gh auth setup-git
+git remote set-url origin https://github.com/siimliimand/subcontractor-marketplace.git
+mkdir -p ~/.local/state/ci-currency
+( crontab -l 2>/dev/null; echo '*/10 * * * * cd /var/www/code.webuilder.dev/subcontractor-marketplace && /usr/local/bin/node scripts/push-main-when-ahead.mjs >> /home/fusion/.local/state/ci-currency/cron.log 2>&1' ) | crontab -
+```
+
+Re-evaluation triggers:
+
+- **Native Fusion post-merge hook** (per the SUBC-008 decision's long-term
+  option): if the engine grows a post-merge hook, migrate the flush into the
+  engine merge flow and retire the cron line and the card — the always-on
+  gap the cron covers would then be closed engine-side.
+- **SUBC-027 (todo):** its auto-adopt work changes gate-script internals
+  only; the cron line, the card, and this entry reference the script's
+  invocation path and log surfaces, not its internals, so its landing
+  changes nothing here. (If SUBC-027 adds a new OK grammar, the SUBC-028
+  coordination note applies: the parser extends, never assumes.)
+
+

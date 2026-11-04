@@ -199,6 +199,20 @@ trigger is now automated.
 
   `/usr/local/bin/node` is deliberate: cron's default PATH lacks
   `/usr/local/bin`, and `/usr/bin/node` does not exist on this host.
+
+  **Re-issue status (2026-11-05, SUBC-032): still NOT installed.** `cron.log`
+  remains absent from the state dir as of 2026-11-05 (the cron has never
+  fired since install; the SUBC-026 landing `50433302` and the SUBC-029
+  landing `9a749b44` sat unpublished on local main until the SUBC-031 manual
+  flush on 2026-11-04). The canonical operator card now lives at
+  `docs/operator-ci-currency-cron.md` — the operator's single entry point
+  (prerequisites, the install block above, rollback, and host-rebuild
+  re-apply). Post-install acceptance is built into the card: `cron.log`
+  appears within ~10 minutes (proof-of-fire) and
+  `node scripts/verify-landing-gate.mjs` exits 0 on the next landing within
+  ~10 minutes. Until installed, every landing needs a manual flush per the
+  Landing checklist above (SUBC-020 action item 1 stands: cron repair is
+  operator-owned).
 - **Drift response:** if `~/.local/state/ci-currency/alert` exists, or
   `node scripts/verify-ci-currency.mjs` exits non-zero, **create an urgent
   task and merge NO further work onto `main` until currency is restored**
