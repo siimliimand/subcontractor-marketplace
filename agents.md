@@ -158,13 +158,15 @@ trigger is now automated.
   timestamp, reason, and the exact next manual action. Runtime state
   (`auto-push.log`, `cron.log`, `alert`, `lock/`) lives under the fusion
   user's `~/.local/state/ci-currency` — never inside the tracked tree.
-- **Credential scope caveat (live 2026-11-03):** the gh OAuth token has scopes
-  `admin:public_key, gist, read:org, repo` — **no `workflow` scope**. GitHub
-  refuses such tokens to push any range touching `.github/workflows/*`
-  (observed: push of main containing SUBC-007's `ci.yml` edit was remote-
-  rejected). Ordinary landings push fine. One-time fix when a workflow-file
-  landing is stuck: run `gh auth refresh -h github.com -s workflow` as the
-  siimliimand identity (browser/device step), then re-run
+- **Credential scope status (live 2026-11-04, verified by SUBC-020):** the gh
+  OAuth token has scopes `admin:public_key, gist, read:org, repo, workflow` —
+  the `workflow` scope was granted 2026-11-04 (the founder's one-time
+  `gh auth refresh -s workflow`; see "Workflow-scope push constraint" in the
+  SUBC-013 section below). The pre-grant caveat (2026-11-03: no `workflow`
+  scope; SUBC-007's `ci.yml` push was remote-rejected) is history — workflow-
+  file landings push fine now. Remediation if a workflow-file landing is ever
+  remote-rejected again: re-run `gh auth refresh -h github.com -s workflow`
+  as the siimliimand identity (browser/device step), then re-run
   `node scripts/push-main-when-ahead.mjs`.
 - **Guarantees:** only `refs/heads/main` is ever pushed (hardcoded single
   refspec + `assertMainRef`; unknown argv refused); `fusion/*` task branches
