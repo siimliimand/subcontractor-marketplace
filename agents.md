@@ -102,7 +102,9 @@
   head_sha and that the run concluded success; any FAIL line names the broken
   link. `ci.yml` also takes `workflow_dispatch` for manual backfills
   (`gh workflow run ci.yml --ref main`). Never force-push, and never push a
-  `fusion/*` task branch to `main`.
+  `fusion/*` task branch to `main`. (Superseded by the auto-push subsection
+  below — automation exists, and the single-writer rule there forbids any
+  agent- or spec-authored direct push of the mainline ref.)
 - The gh OAuth token lives in the gh config (`gh auth status` to verify, values
   redacted) and the credential helper is written to the home git config —
   **never echo or commit token values**; same rule as the Cloudflare token
@@ -174,6 +176,31 @@ trigger is now automated.
   `ghp_`/`gho_`/`github_pat_`/`x-access-token:` material before it is written;
   no credential material in commits. The script works from the primary
   checkout or any linked fusion worktree (git shared refs).
+- **Single-writer landing contract (added by SUBC-025, 2026-11-05; see
+  "Non-watchdog push of 61f81e8 attributed — 2026-11-04 (SUBC-025)" in
+  `docs/decision-log.md` for the incident that motivated it):**
+  1. **Single writer:** `scripts/push-main-when-ahead.mjs`
+     is the only component that ever pushes the mainline ref, via exactly
+     three triggers (cron tick, landing-gate run, operator manual run) —
+     and it always pushes local `main`, never a task tip chain.
+  2. **Prohibition:** agents and task specs must never instruct or perform
+     a direct push of a task tip to the mainline ref (`git push origin
+     HEAD:refs/heads/main`, `git push origin main` from a task worktree, or
+     any equivalent) — including as a currency-restore or stall-flush
+     maneuver. Recorded reason: the 2026-11-04 SUBC-018 landing did exactly
+     this (its spec's Step 4 told the executor to) and produced the
+     SHA-diverged mainline wedge that SUBC-022/SUBC-023 hand-repaired and
+     SUBC-024 root-caused.
+  3. **Pending-landing semantics:** when the gate exits 0 as a no-op
+     because the engine has not yet squash-landed the task, the landing is
+     pending, not failed — record the pending state in the task log per the
+     drift response; the publish flush is the next gate/cron tick after
+     the engine lands (cron repair remains operator-owned per the SUBC-020
+     action items).
+  4. **Probe-shadow caveat:** after probe cleanup, stale failing probe
+     runs can keep the currency guard red until the landing publishes a
+     newer green main run — the resolution is the pending-landing flow
+     above, never a direct tip push.
 
 ## CI merge gate and failure alerts (SUBC-013, 2026-11-04)
 

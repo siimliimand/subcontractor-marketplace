@@ -329,3 +329,99 @@ gate passed live; PR #3 and all legacy probe artifacts untouched):
 | Local pin tag | `git tag rescue/fusion-subc-011 d6f932f…` — local only, never pushed; `git rev-parse rescue/fusion-subc-011` → `d6f932f929a7707a87f39b0a1ab823e17251c291` | The commit is gc-safe and the deletion is fully reversible via the recreate command above |
 | PR #3 post-delete | `gh pr view 3 --json state` → still `MERGED`; no comment, edit, or close was made | The rescue evidence itself is preserved verbatim |
 
+## Non-watchdog push of 61f81e8 attributed — 2026-11-04 (SUBC-025)
+
+**Decision: the 2026-11-04T14:27:34Z push that advanced origin/main from `e53c3d9` to
+`61f81e8` was performed by the SUBC-018 executor agent itself, executing the direct
+tip-chain landing instruction written into its own task spec's Step 4 — NOT by the
+founder (no manual push; probe PR #5 was closed unmerged at 14:24:29Z, three minutes
+before the push) and NOT by the watchdog/gate (its log is silent across the window and
+local main did not contain `61f81e8` until 15:10:35Z). The push violated the SUBC-008
+single-writer mechanism contract — a contract no agents.md sentence then made explicit
+against spec-authored direct tip pushes; that contract is now explicit in agents.md §
+"Auto-push on landing" via this same landing (single-writer rule, direct-tip-push
+prohibition, pending-landing semantics, probe-shadow caveat), so no future task spec
+can sanction the maneuver again.** Starting evidence: task document key=evidence on
+SUBC-025 (every row independently re-verified 2026-11-05 from primary surfaces), quoted
+per the operator's instruction.
+
+Provenance (timeline UTC; agent-log quotes marked ⚑ are recorded prior evidence — the
+planner's 2026-11-05 verbatim capture from the SUBC-018 agent log; the SUBC-025
+executor could not replay that log directly because `fn_task_logs_read` is
+current-task-scoped, and instead re-verified the same events through the persisted
+SUBC-018 step reports, the commit metadata, the reflogs, the gate log, and GitHub's
+API — all first-hand):
+
+- **14:27:04 ⚑** — SUBC-018 executor commits `61f81e8` in the subc-018 worktree
+  (agent-log bash `git add`/`git commit` entry). First-hand: the commit's
+  AuthorDate/CommitDate are `Wed Nov 4 15:27:04 2026 +0100` (= 14:27:04Z), author
+  `Fusion Factory <fusion@factory.webuilder.dev>`, message `feat(SUBC-018): complete
+  Step 4 — document PR head-branch alert naming`, trailer `Fusion-Task-Id: SUBC-018`.
+- **14:27:32 ⚑** — the executor runs `git push origin HEAD:refs/heads/main &&
+  git ls-remote origin refs/heads/main` from the task worktree (agent-log tool entry,
+  verbatim command). First-hand corroboration: the executor's persisted Step 4 step
+  report (recordedAt 2026-11-04T14:31:02.128Z) admits it in the first person —
+  "Committed as 61f81e8, then landed the reviewed tip to origin main
+  (e53c3d9..61f81e8) — landing run #26 green, probe shadowing healed, currency legs
+  (b)+(c) verified live. Leg (a) pends the engine's standard fast-forward of local
+  main at task completion (guard exit 1 recorded with the exact heal path)."
+- **14:30:12 ⚑** — the executor self-reports the landing in the task log: "SUBC-018
+  final landing: pushed reviewed tip 61f81e8 to origin main (git push origin
+  HEAD:refs/heads/main; e53c3d9..61f81e8 …). Landing run #26 (id 41847758728 …)
+  concluded success in 55s".
+- **The causative instruction** — SUBC-018's PROMPT.md Step 4, verbatim: "Land the
+  task branch on origin main per the documented landing flow: push the reviewed tip
+  (`git push origin HEAD:refs/heads/main` — this is the probe-shadowing-restore
+  landing; the engine's watchdog treats an already-current main as a no-op)." The
+  parenthetical was wrong in the direction that mattered: the engine's independent
+  squash-landing created the divergence, not a no-op. The same file's Do-NOT section
+  had restricted the main push to "the final Step 4 landing" — which the instruction
+  itself was, so no internal contradiction fired.
+- **14:27:34** — origin/main reflog: `61f81e8 refs/remotes/origin/main@{2026-11-04
+  15:27:34 +0100}: update by push`; a clean fast-forward (the three-commit series
+  `b23ddf4`→`969e92d`→`61f81e8` sits on base `e53c3d9`).
+- **14:27:36** — Actions run #26 (id 41847758728) created: event `push`, head_branch
+  `main`, head_sha `61f81e8b227e77a820bd0dc153a9b08b5363167e`, conclusion `success`.
+  Attribution limit stated explicitly: every push from this host rides the shared
+  siimliimand gh OAuth token, so GitHub's actor/triggering_actor fields (both
+  `siimliimand`) are token-level only and cannot separate agent from founder — the
+  attribution rests on the host-side evidence above.
+- **PR #5 disproof** — `gh pr view 5 --json state,mergedAt`: `CLOSED`, `mergedAt`
+  null, closed 14:24:29Z, head `ci-gate-probe/20261104-headref`; never merged, so it
+  cannot have advanced main. The founder-manual/PR-#5 attribution previously recorded
+  in project memory is wrong and is superseded by this entry.
+
+Consequence chain (cross-referenced, not re-litigated): the engine merger — consulting
+only local main, still at `e53c3d9` — judged SUBC-018 unmerged at landing time and
+fast-forwarded its own squash `7bfab34` (identical tree `4a55ec8…`, different SHA)
+onto local main at 14:54:36Z, producing the Regime B divergence (ahead 1 / behind 3)
+the gate refused at 15:08:31Z; SUBC-022/SUBC-023 hand-repaired the wedge (external
+CAS repair onto `61f81e8` at 15:10:35Z — the empty-message main reflog entry — then
+gate flushes), and SUBC-024 root-caused the engine-side race (already-merged detection
+never consults origin), which is maintainer-routed via that task's decision-log draft.
+The */10 watchdog cron repair remains operator-owned per the SUBC-020 action items —
+the gate-log gap below (12:54:29Z→15:08:31Z) also corroborates that the cron was not
+firing.
+
+Evidence (re-verified 2026-11-05, SUBC-025, worktree `subc-025`; full verbatim replay
+outputs in task document key=evidence on SUBC-025):
+
+| # | Time (UTC) | Event | Evidence surface |
+|---|---|---|---|
+| 1 | 2026-11-04 12:53:07Z (reflog 13:53:08 +0100) | Last sanctioned publish: gate pushes `e53c3d9` to origin/main | `~/.local/state/ci-currency/auto-push.log` lines "12:53:07.150Z … → push", "12:53:07.159Z pushing main (e53c3d9…) to origin/main (single hardcoded refspec, no --force)", "12:54:29.498Z OK main pushed and green (run #22)"; origin/main reflog `e53c3d9 … 13:53:08 +0100: update by push` |
+| 2 | 2026-11-04 14:27:04Z | SUBC-018 executor commits `61f81e8` in the subc-018 worktree | ⚑ agent-log bash entry; first-hand: `git show -s --format=fuller 61f81e8` (AuthorDate/CommitDate 15:27:04 +0100, `Fusion-Task-Id: SUBC-018`) |
+| 3 | 2026-11-04 14:27:32Z | The non-watchdog push: `git push origin HEAD:refs/heads/main && git ls-remote origin refs/heads/main` | ⚑ agent-log tool entry; first-hand: persisted Step 4 step report (14:31:02.128Z) admitting "Committed as 61f81e8, then landed the reviewed tip to origin main (e53c3d9..61f81e8)" |
+| 4 | 2026-11-04 14:27:34Z | origin/main advances `e53c3d9` → `61f81e8` ("update by push") | `git reflog show origin/main --date=iso` → `61f81e8 … 15:27:34 +0100: update by push` |
+| 5 | 2026-11-04 14:27:36Z | Actions run #26 (id 41847758728) created — event push, head_branch main, head_sha `61f81e8b…`, actor/triggering_actor siimliimand (token-level only) | `gh api repos/siimliimand/subcontractor-marketplace/actions/runs/41847758728` (run_number 26, conclusion success) |
+| 6 | 2026-11-04 14:30:12Z | Executor self-reports the landing in the task log | ⚑ agent-log fn_task_log entry; corroborated by the persisted Step 5 step report (14:32:38.476Z) |
+| 7 | 2026-11-04 14:46:56Z–14:52:56Z | Engine merger builds squash `7bfab34` in the ai-merge clean room | ⚑ merger agent-log entries (SUBC-024 record); first-hand: `git show -s 7bfab34` (parent `e53c3d9`, squash title) + tree identity below |
+| 8 | 2026-11-04 14:54:36Z (reflog 15:54:36 +0100) | Engine fast-forwards `7bfab34` onto local main — SHA-distinct from `61f81e8` over identical tree `4a55ec8…` → Regime B divergence | `git reflog show main --date=iso` → `7bfab34 … 15:54:36 +0100: merge …: Fast-forward`; `git rev-parse 61f81e8^{tree} 7bfab34^{tree}` → both `4a55ec844683c96ae5dc61b0adf5913c3c19f424` |
+| 9 | 2026-11-04 15:08:31Z → 15:11:02Z | Gate diverged-refuse (ahead=1 behind=3) → silent CAS repair moves local main onto `61f81e8` at 15:10:35Z → gate noop | auto-push.log "15:08:31.238Z … ahead=1 behind=3 → refuse" then "15:11:02.405Z … ahead=0 behind=0 → noop"; main reflog `61f81e8 main@{2026-11-04 16:10:35 +0100}:` (empty message) |
+| 10 | (state check) | PR #5 (ci-gate-probe/20261104-headref) CLOSED, `mergedAt` null — never merged; founder-manual/PR-#5 hypothesis disproven | `gh pr view 5 --json number,state,mergedAt,title,headRefName,closedAt` (closed 14:24:29Z) |
+
+Gate-exclusion proof (why this was mechanically NOT the watchdog): auto-push.log jumps
+from "12:54:29.498Z OK main pushed and green (tip e53c3d9…)" directly to "15:08:31.238Z
+… refuse (… ahead 1, behind 3 …)" — no gate run logged in between; and local main stood
+at `e53c3d9` until 14:54:36Z, so a component that only ever pushes local main could not
+have pushed `61f81e8` at 14:27:34Z.
+
