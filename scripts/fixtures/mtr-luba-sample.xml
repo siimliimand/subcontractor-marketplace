@@ -1,0 +1,274 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SUBC-015 fixture: current (2026-11) MTR/Tarvik daily-export layout —
+  ettevotja > load > luba — mirroring avaandmed_ettevotjad.xml (2026-11-04).
+  Covers every data state enumerated in the task surface:
+  staatus kehtiv/esitatud/peatatud, kehtiv_kuni nil/past/today/future,
+  emtak bare-string / single-kood / repeated-kood forms, emtak2025-only
+  mapping, multiple luba per ettevotja, foreign registrikood variants
+  ((SIRET) …, apostrophe-bearing, 0146519-2, 10-digit MTR), unmapped-EMTAK
+  companies and companies with no load at all.
+  Expected outcome (today = 2026-11-04) is pinned in test/import-mtr.test.ts.
+-->
+<ettevotjad xmlns="https://mtr.ttja.ee/avaandmed/schema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <!-- 1. kehtiv + nil end + emtak bare-string form → electrical valid -->
+  <ettevotja>
+    <registrikood>11111111</registrikood>
+    <nimi>OÜ Elektrikesk</nimi>
+    <riik_kood>EST</riik_kood>
+    <url>https://mtr.ttja.ee/juriidiline_isik/900001</url>
+    <load>
+      <luba>
+        <tyyp>Majandustegevusteade</tyyp>
+        <number>EEH000001</number>
+        <staatus>kehtiv</staatus>
+        <url>https://tarvik.ttja.ee/teated/900001</url>
+        <valdkond></valdkond>
+        <tegevusala>Elektritööd</tegevusala>
+        <emtak>43211</emtak>
+        <kehtiv_alates>2022-03-09</kehtiv_alates>
+        <kehtiv_kuni xsi:nil="true"/>
+      </luba>
+    </load>
+  </ettevotja>
+  <!-- 2. repeated-kood emtak → plumbing+hvac; esitatud luba keeps anyValid -->
+  <ettevotja>
+    <registrikood>22222222</registrikood>
+    <nimi>OÜ Torumees</nimi>
+    <riik_kood>EST</riik_kood>
+    <url>https://mtr.ttja.ee/juriidiline_isik/900002</url>
+    <load>
+      <luba>
+        <tyyp>Majandustegevusteade</tyyp>
+        <number>TEL000002</number>
+        <staatus>kehtiv</staatus>
+        <url>https://tarvik.ttja.ee/teated/900002</url>
+        <valdkond></valdkond>
+        <tegevusala>Paigaldus- ja torutööd</tegevusala>
+        <emtak>
+          <kood>43220</kood>
+          <kood>43999</kood>
+        </emtak>
+        <emtak2025>
+          <kood>43220</kood>
+        </emtak2025>
+        <kehtiv_alates>2021-01-01</kehtiv_alates>
+        <kehtiv_kuni>2027-06-30</kehtiv_kuni>
+      </luba>
+      <luba>
+        <tyyp>Majandustegevusteade</tyyp>
+        <number>TEL000003</number>
+        <staatus>esitatud</staatus>
+        <url>https://tarvik.ttja.ee/teated/900003</url>
+        <valdkond></valdkond>
+        <tegevusala>Paigaldus- ja torutööd</tegevusala>
+        <emtak>
+          <kood>43221</kood>
+        </emtak>
+        <kehtiv_alates>2026-10-01</kehtiv_alates>
+        <kehtiv_kuni xsi:nil="true"/>
+      </luba>
+    </load>
+  </ettevotja>
+  <!-- 3. peatatud (nil end) + kehtiv-but-expired → drywall invalid, still upserted -->
+  <ettevotja>
+    <registrikood>33333333</registrikood>
+    <nimi>OÜ Kipsmeister</nimi>
+    <riik_kood>EST</riik_kood>
+    <url>https://mtr.ttja.ee/juriidiline_isik/900004</url>
+    <load>
+      <luba>
+        <tyyp>Majandustegevusteade</tyyp>
+        <number>TKM000004</number>
+        <staatus>peatatud</staatus>
+        <url>https://tarvik.ttja.ee/teated/900004</url>
+        <valdkond></valdkond>
+        <tegevusala>Krohvimistööd</tegevusala>
+        <emtak>
+          <kood>43310</kood>
+        </emtak>
+        <kehtiv_alates>2019-05-01</kehtiv_alates>
+        <kehtiv_kuni xsi:nil="true"/>
+      </luba>
+      <luba>
+        <tyyp>Majandustegevusteade</tyyp>
+        <number>TKM000005</number>
+        <staatus>kehtiv</staatus>
+        <url>https://tarvik.ttja.ee/teated/900005</url>
+        <valdkond></valdkond>
+        <tegevusala>Kipsplaatimistööd</tegevusala>
+        <emtak>
+          <kood>43320</kood>
+        </emtak>
+        <kehtiv_alates>2019-05-01</kehtiv_alates>
+        <kehtiv_kuni>2020-01-01</kehtiv_kuni>
+      </luba>
+    </load>
+  </ettevotja>
+  <!-- 4. end date exactly today (2026-11-04) → still valid -->
+  <ettevotja>
+    <registrikood>44444444</registrikood>
+    <nimi>OÜ Põrandaja</nimi>
+    <riik_kood>EST</riik_kood>
+    <url>https://mtr.ttja.ee/juriidiline_isik/900006</url>
+    <load>
+      <luba>
+        <tyyp>Majandustegevusteade</tyyp>
+        <number>TPR000006</number>
+        <staatus>kehtiv</staatus>
+        <url>https://tarvik.ttja.ee/teated/900006</url>
+        <valdkond></valdkond>
+        <tegevusala>Põranda- ja seinvoodritööd</tegevusala>
+        <emtak>
+          <kood>43330</kood>
+          <kood>43999</kood>
+        </emtak>
+        <emtak2025>
+          <kood>43330</kood>
+        </emtak2025>
+        <kehtiv_alates>2023-02-01</kehtiv_alates>
+        <kehtiv_kuni>2026-11-04</kehtiv_kuni>
+      </luba>
+    </load>
+  </ettevotja>
+  <!-- 5. mapping only via emtak2025 (emtak itself unmapped) → painting valid -->
+  <ettevotja>
+    <registrikood>55555555</registrikood>
+    <nimi>OÜ Värvikas</nimi>
+    <riik_kood>EST</riik_kood>
+    <url>https://mtr.ttja.ee/juriidiline_isik/900007</url>
+    <load>
+      <luba>
+        <tyyp>Majandustegevusteade</tyyp>
+        <number>TML000007</number>
+        <staatus>kehtiv</staatus>
+        <url>https://tarvik.ttja.ee/teated/900007</url>
+        <valdkond></valdkond>
+        <tegevusala>Maalimis- ja klaasimistööd</tegevusala>
+        <emtak>
+          <kood>41201</kood>
+        </emtak>
+        <emtak2025>
+          <kood>43341</kood>
+        </emtak2025>
+        <kehtiv_alates>2024-01-01</kehtiv_alates>
+        <kehtiv_kuni xsi:nil="true"/>
+      </luba>
+    </load>
+  </ettevotja>
+  <!-- 6. foreign registrikood variants: exact-match no-ops (SIRET, apostrophe,
+       0146519-2, 10-digit MTR) with kehtiv electrical licences -->
+  <ettevotja>
+    <registrikood>(SIRET) 841 489 123 00015</registrikood>
+    <nimi>Kineis</nimi>
+    <riik_kood>FRA</riik_kood>
+    <url>https://mtr.ttja.ee/juriidiline_isik/900008</url>
+    <load>
+      <luba>
+        <tyyp>Majandustegevusteade</tyyp>
+        <number>STO000008</number>
+        <staatus>kehtiv</staatus>
+        <url>https://tarvik.ttja.ee/teated/900008</url>
+        <valdkond></valdkond>
+        <tegevusala>Elektritööd</tegevusala>
+        <emtak>
+          <kood>43211</kood>
+        </emtak>
+        <kehtiv_kuni>2027-01-31</kehtiv_kuni>
+      </luba>
+    </load>
+  </ettevotja>
+  <ettevotja>
+    <registrikood>(SIRET) 841'489 123 00015</registrikood>
+    <nimi>Apostrophe SIRET Demo</nimi>
+    <riik_kood>FRA</riik_kood>
+    <url>https://mtr.ttja.ee/juriidiline_isik/900009</url>
+    <load>
+      <luba>
+        <tyyp>Majandustegevusteade</tyyp>
+        <number>STO000009</number>
+        <staatus>kehtiv</staatus>
+        <url>https://tarvik.ttja.ee/teated/900009</url>
+        <valdkond></valdkond>
+        <tegevusala>Elektritööd</tegevusala>
+        <emtak>
+          <kood>43211</kood>
+        </emtak>
+        <kehtiv_kuni xsi:nil="true"/>
+      </luba>
+    </load>
+  </ettevotja>
+  <ettevotja>
+    <registrikood>0146519-2</registrikood>
+    <nimi>Caverion Suomi Oy</nimi>
+    <riik_kood>FIN</riik_kood>
+    <url>https://mtr.ttja.ee/juriidiline_isik/900010</url>
+    <load>
+      <luba>
+        <tyyp>Majandustegevusteade</tyyp>
+        <number>EEH000010</number>
+        <staatus>kehtiv</staatus>
+        <url>https://tarvik.ttja.ee/teated/900010</url>
+        <valdkond></valdkond>
+        <tegevusala>Elektritööd</tegevusala>
+        <emtak>
+          <kood>43211</kood>
+        </emtak>
+        <kehtiv_kuni>2027-01-31</kehtiv_kuni>
+      </luba>
+    </load>
+  </ettevotja>
+  <ettevotja>
+    <registrikood>1000000012</registrikood>
+    <nimi>10-digit MTR Demo</nimi>
+    <riik_kood>EST</riik_kood>
+    <url>https://mtr.ttja.ee/juriidiline_isik/900011</url>
+    <load>
+      <luba>
+        <tyyp>Majandustegevusteade</tyyp>
+        <number>EEH000011</number>
+        <staatus>kehtiv</staatus>
+        <url>https://tarvik.ttja.ee/teated/900011</url>
+        <valdkond></valdkond>
+        <tegevusala>Elektritööd</tegevusala>
+        <emtak>
+          <kood>43211</kood>
+        </emtak>
+        <kehtiv_kuni xsi:nil="true"/>
+      </luba>
+    </load>
+  </ettevotja>
+  <!-- 10. licence present but EMTAK maps to no cockpit trade → not matched -->
+  <ettevotja>
+    <registrikood>88888888</registrikood>
+    <nimi>OÜ Sideteenus</nimi>
+    <riik_kood>EST</riik_kood>
+    <url>https://mtr.ttja.ee/juriidiline_isik/900012</url>
+    <load>
+      <luba>
+        <tyyp>Majandustegevusteade</tyyp>
+        <number>STO000012</number>
+        <staatus>kehtiv</staatus>
+        <url>https://tarvik.ttja.ee/teated/900012</url>
+        <valdkond></valdkond>
+        <tegevusala>Sideteenuse osutamine</tegevusala>
+        <emtak>
+          <kood>61109</kood>
+          <kood>61209</kood>
+        </emtak>
+        <emtak2025>
+          <kood>61901</kood>
+        </emtak2025>
+        <kehtiv_alases>2022-03-09</kehtiv_alases>
+        <kehtiv_kuni xsi:nil="true"/>
+      </luba>
+    </load>
+  </ettevotja>
+  <!-- 11. no load element at all → no notices, not matched -->
+  <ettevotja>
+    <registrikood>99999999</registrikood>
+    <nimi>OÜ Registreerimata</nimi>
+    <riik_kood>EST</riik_kood>
+    <url>https://mtr.ttja.ee/juriidiline_isik/900013</url>
+  </ettevotja>
+</ettevotjad>

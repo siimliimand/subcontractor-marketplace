@@ -43,8 +43,9 @@ npm run dev                           # wrangler dev (API :8787) + vite (UI :517
 npm test
 ```
 
-267 integration tests run against real D1 in miniflare (auth, providers, requests,
-outreach, effort, dashboard, email pipeline, full email journey). Count verified 2026-11-03.
+320 integration tests run against real D1 in miniflare (auth, providers, requests,
+outreach, effort, dashboard, email pipeline, full email journey, register
+imports). Count verified 2026-11-04.
 
 ## Schema changes
 
@@ -77,7 +78,7 @@ is empty.
 
 ## CI
 
-`.github/workflows/ci.yml` runs lint, build, typecheck and the 299 integration tests
+`.github/workflows/ci.yml` runs lint, build, typecheck and the 320 integration tests
 on **every push (any branch)** and on pull requests; failed runs open a `ci-failure`
 issue as an alert, and a `ci-merge-gate-pilot` ruleset gates PR merges into `main`
 on the `test` check (currently **disabled** — parked pending PR-based landing

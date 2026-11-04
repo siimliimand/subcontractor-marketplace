@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SUBC-015 fixture: format DRIFT. Undertakers are still locatable (registrikood
+  + nimi), but the notice-like structure uses unknown keys ("teated"/"teade")
+  matching neither the legacy /teatis/i keys nor the current /load|luba/i keys.
+  The pre-SUBC-015 script would have extracted ZERO upserts here and still
+  executed the expire-all UPDATE — flipping every mtr:% trade_notification
+  row to 'invalid' in one pass. The zero-upsert guard must refuse.
+-->
+<ettevotjad>
+  <ettevotja>
+    <registrikood>12345678</registrikood>
+    <nimi>OÜ Test Electric AS</nimi>
+    <teated>
+      <teade>
+        <number>1</number>
+        <tegevusala_nimi>Elektritööd</tegevusala_nimi>
+        <klassifikaator>43210</klassifikaator>
+      </teade>
+    </teated>
+  </ettevotja>
+  <ettevotja>
+    <registrikood>34567890</registrikood>
+    <nimi>OÜ Fresh Painting</nimi>
+    <teated>
+      <teade>
+        <number>2</number>
+        <tegevusala_nimi>Maalimistööd</tegevusala_nimi>
+        <klassifikaator>43340</klassifikaator>
+      </teade>
+    </teated>
+  </ettevotja>
+</ettevotjad>

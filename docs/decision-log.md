@@ -134,6 +134,75 @@ precisely because enforcement stays disabled; no cron-line change is needed. Cur
 evaluation: `verify-ci-currency` exit 0 (local main == origin/main `5637fba` == green run
 #20, id 41806748303).
 
+## MTR import format-drift hazard and fix — 2026-11-04 (SUBC-015)
+
+**Decision: the MTR/Tarvik import now understands both export layouts (legacy
+`teatised/teatis` and current `load/luba`), and a zero-upsert guard makes it
+structurally impossible for a format-drifted export to issue the expire-all
+UPDATE — already-imported rows stay untouched until a verified re-import is
+deliberately executed after SUBC-012's TTJA confirmation.** Owner: founder
+(re-import execution); engineering: extraction + guard shipped here.
+
+**The hazard (why re-import was blocked):** running the pre-fix
+`scripts/import-mtr.mjs` against the current (2026-11-04) daily export parsed
+all 56,666 undertakers but extracted **zero** trade-notification upserts —
+`noticesOf` only recognised `teatis*` keys, and the export had moved to
+`ettevotja > load > luba` — yet the script still emitted its unconditional
+expire-all `UPDATE company_verifications SET status = 'invalid' …`. One
+applied pass would have flipped **every existing `mtr:%` trade_notification
+row to `invalid`**, wiping badge validity across staging and production until
+a fixed re-import restored it.
+
+**The fix (all in `scripts/import-mtr-lib.mjs` + thin CLI
+`scripts/import-mtr.mjs`, no `src/` or runtime changes):**
+
+- Notice extraction handles both layouts — legacy `/teatis/i` keys unchanged
+  (regression fixture byte-identical) and current `/load|luba/i` keys with
+  array/single/wrapper shapes normalised in code, not by parser config.
+- Per-licence EMTAK codes collected from `emtak` AND `emtak2025` (repeated
+  `<kood>` children); digit-prefix trade mapping unchanged
+  (4321→electrical; 4322→plumbing+hvac; 4331/4332→drywall; 4333→flooring;
+  4334→painting); `registrikood` matching stays exact (foreign `(SIRET)`/
+  `0146519-2`/10-digit codes are harmless no-op upserts).
+- Validity: when `staatus` is present only `kehtiv` counts as valid
+  (`esitatud`/`peatatud` → invalid); `kehtiv_kuni` `xsi:nil`/absent is
+  open-ended; `end >= today`; legacy notices keep the end-date-only rule;
+  per-(company, trade) anyValid preserved.
+- **Zero-upsert guard:** zero upserts ⇒ no expire UPDATE, distinct warnings
+  for extraction drift vs EMTAK mapping drift, CLI exit code 1 with
+  comments-only SQL; `--force-expire` emits the UPDATE anyway (exit 0,
+  WARNING comment + stderr). Exit codes: 0 healthy/forced, 1 guard/parse
+  failure.
+
+**Re-evaluation trigger:** any future MTR/Tarvik export schema change
+(re-check the header line's "with relevant notices" count before applying
+any import; ~5,097 is the current healthy figure), or SUBC-012's TTJA
+licence confirmation landing, which unblocks the deliberate founder-run
+re-import.
+
+**Known limitations (recorded honestly, not fixed here):**
+
+- The expire UPDATE's semantics are **unchanged** by design: it still expires
+  ALL trades of companies absent from the import; a company present in the
+  import that dropped one trade keeps its stale valid row for that trade
+  (pre-existing behaviour; follow-up candidate, deliberately out of scope).
+- `tyyp` is not filtered — the ≈5,097 spot-check figure was derived without
+  it, so filtering now would change the validated counts.
+- A future re-import re-stamps the "display pending TTJA licence
+  confirmation" licence string until the founder updates it post-confirmation.
+
+Evidence (2026-11-04, real export — dry-run only, applied nowhere; full
+record in task SUBC-015 document `dry-run-evidence`):
+
+| Check | Observation |
+|---|---|
+| Undertakers read | 56,666 (matches recorded file facts exactly) |
+| Matched undertakers | **5,097** (exact match to the recorded fact; 5,000–5,200 accepted) |
+| Upsert rows | 8,095 ≥ 5,097 (4322 maps to plumbing+hvac): electrical 3,740, plumbing 910, hvac 910, drywall 845, flooring 845, painting 845 — all six trades present |
+| Independent cross-check | From-scratch parser (no shared code) reproduced every count exactly |
+| Guard against real file | Exit 0, expire UPDATE present — no over-trigger on the understood format |
+| Guard against drifted file | `test/import-mtr.test.ts` (21 cases): drifted plan emits no INSERT/UPDATE; executed against miniflare D1 it leaves a pre-existing valid row valid; D1-level idempotency + expire path + faithful per-trade expiry pinned |
+| Regression anchors | `scripts/fixtures/mtr-sample.xml` unmodified; `test/verification.test.ts` and `src/worker/verification.ts` untouched and green |
 ## `no-explicit-any` enabled — 2026-11-04 (SUBC-017)
 
 **Decision: `@typescript-eslint/no-explicit-any` is now `'error'` in `eslint.config.mjs`.**

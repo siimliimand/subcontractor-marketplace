@@ -25,6 +25,17 @@
 - Workflow: download the open-data file (Äriregister CSV from
   avaandmed.ariregister.rik.ee; MTR XML from mtr.ttja.ee/opendata), run the
   script to emit SQL, apply with `wrangler d1 execute … --file`.
+- **Dry-run first (SUBC-015):** always emit the SQL to a scratch file and read
+  the `-- summary:` line BEFORE applying — a healthy MTR import reads
+  `≈5,097 trade-notification rows upserted across ≈5,097 undertakers` (all six
+  trades). Only apply after the counts make sense; never pipe the import
+  straight into `d1 execute`.
+- **MTR zero-upsert guard (SUBC-015):** if the export format drifts and the
+  import finds ZERO upserts, the script emits NO expire-all UPDATE, prints a
+  GUARD diagnostic to stderr naming the drift signal, and exits 1 — a drifted
+  file can never flip every `mtr:%` trade_notification row to `invalid` in one
+  pass. `--force-expire` overrides explicitly (exit 0 + WARNING); treat that
+  flag as an operator decision, never a workaround for unexplained counts.
 - **MTR/Tarvik badge display stays behind `MTR_BADGES_ENABLED` (default off)
   until the founder's TTJA licence confirmation (CC BY-SA 3.0 share-alike) is
   recorded** — docs/phase0/register-findings.md follow-up #1. Importing is
