@@ -35,10 +35,15 @@ export default tseslint.config(
       'react-hooks': reactHooks,
     },
     rules: {
-      // SUBC-013 baseline decision (docs/decision-log.md): `no-explicit-any` stays
-      // off for the pilot lint gate — the codebase uses `any` in Cloudflare
-      // bindings plumbing and tightening it is a follow-up, not a pilot gate.
-      '@typescript-eslint/no-explicit-any': 'off',
+      // SUBC-017 (docs/decision-log.md): `no-explicit-any` is now an error,
+      // completing the SUBC-013 pilot-period deferral ahead of the pilot-end
+      // re-evaluation trigger. The bindings plumbing that justified the
+      // deferral is typed: src Hono helpers take real Context generics
+      // (Context<AppEnv> / Context<{ Bindings: PortalEnv }>) and the test
+      // suite reads a declared, typed `globalThis.__testAccessKey` global.
+      // Per-file eslint-disable comments remain forbidden — rule changes
+      // happen only here with a justification comment and decision-log record.
+      '@typescript-eslint/no-explicit-any': 'error',
       // Unused bindings may be silenced with an underscore prefix.
       '@typescript-eslint/no-unused-vars': [
         'error',

@@ -559,7 +559,7 @@ export async function computeWeeklyDashboard(
   // or before that Sunday ÷ active providers (constant snapshot denominator).
   const activeProviders = Number((activeProviderRows as unknown as Array<{ n: number }>)[0]?.n ?? 0);
 
-  // Collect the week range: every week that has any request, plus the range
+  // Collect the week range: every week containing a request, plus the range
   // bounds, sorted.
   const weekSet = new Set<string>();
   for (const r of requests) {

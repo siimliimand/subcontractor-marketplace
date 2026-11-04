@@ -6,7 +6,7 @@ import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
 
 const db = () => drizzle(env.DB);
-const accessKey = () => (globalThis as any).__testAccessKey;
+const accessKey = () => globalThis.__testAccessKey;
 
 afterEach(async () => {
   await db().delete(auditEvents);

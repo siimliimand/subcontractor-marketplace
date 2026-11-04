@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { desc, eq, and, isNull } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
 import { bookingReviews, bookings, companies } from "../db/schema";
@@ -71,7 +71,7 @@ reviewsRouter.post("/bookings/:bookingId/review", async (c) => {
   return c.json(review, 201);
 });
 
-async function getReviewContext(c: any, bookingId: string) {
+async function getReviewContext(c: Context<AppEnv>, bookingId: string) {
   const db = drizzle(c.env.DB);
   const review = (
     await db.select().from(bookingReviews).where(eq(bookingReviews.bookingId, bookingId)).limit(1)

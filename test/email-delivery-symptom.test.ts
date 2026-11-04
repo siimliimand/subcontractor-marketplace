@@ -38,7 +38,7 @@ const HOOK = "https://example.com/hooks/email-events";
 const BEARER = { Authorization: "Bearer test-webhook-secret" };
 
 beforeEach(async () => {
-  const { privateKey } = (globalThis as any).__testAccessKey;
+  const { privateKey } = globalThis.__testAccessKey;
   authHeaders = accessHeaders(
     await makeAccessToken(privateKey, { email: "staff@example.com" }),
   );

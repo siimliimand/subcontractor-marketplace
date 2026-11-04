@@ -133,3 +133,46 @@ Watchdog disposition (NO-GO): unchanged — the 10-min cron's direct-push path s
 precisely because enforcement stays disabled; no cron-line change is needed. Currency at
 evaluation: `verify-ci-currency` exit 0 (local main == origin/main `5637fba` == green run
 #20, id 41806748303).
+
+## `no-explicit-any` enabled — 2026-11-04 (SUBC-017)
+
+**Decision: `@typescript-eslint/no-explicit-any` is now `'error'` in `eslint.config.mjs`.**
+This completes — ahead of the pilot-end re-evaluation trigger — the recorded deferral in the
+SUBC-013 lint-baseline paragraph above ("`no-explicit-any` stays off … tightening is a follow-up,
+not a pilot gate"; that paragraph stays untouched as history). The `any` usages that justified
+the deferral were the Cloudflare bindings plumbing; all of them are now typed, so the CI lint
+gate refuses new untyped placeholders from this landing forward.
+
+**Fixed inventory (grep-verified 42 sites, zero runtime behavior change):**
+
+- **4 src helper parameters** typed with real Hono context generics —
+  `getRequestOr404` and `getProposalContext` (`src/worker/routes/bookingRequests.ts`) and
+  `getReviewContext` (`src/worker/routes/reviews.ts`) now take `Context<AppEnv>`;
+  `requireProviderUser` (`src/worker/providerPortal.ts`) takes
+  `Context<{ Bindings: PortalEnv }>`. `Bindings`/`AppEnv` in `src/worker/app.ts` were referenced
+  read-only, never redefined.
+- **37 test sites** converted from `(globalThis as any).__testAccessKey` to a declared, typed
+  `globalThis.__testAccessKey` global (`declare global` in `test/env.d.ts`, typed as
+  `Awaited<ReturnType<typeof makeAccessKey>>`): the writer `test/apply-migrations.ts` (vitest
+  `setupFiles`) plus 36 reader files that destructure `privateKey` to mint Cf-Access JWTs.
+- **1 typed module introspection** in `test/effort.test.ts` (`as any` import of
+  `../src/worker/app` replaced by a `Record<string, unknown>` property access with a
+  `typeof === "function"` guard) — semantics-preserving: `app.ts` exports no `appPaths`, so the
+  route list stays `[]` exactly as before and every assertion is byte-identical. That introspection
+  is vacuous today (known, accepted); replacing or deleting it is deliberately left as follow-up
+  work, not this task.
+
+**Standing rules unchanged:** per-file `eslint-disable` comments remain forbidden; rule changes
+happen only in `eslint.config.mjs` with a justification comment and a decision-log record (the
+config comment was rewritten to record this completion). The react-hooks rule settings and the
+ignores list are untouched (SUBC-016 owns those).
+
+Evidence (2026-11-04, SUBC-017, worktree `subc-017`):
+
+| Factor | Observation | Implication |
+|---|---|---|
+| Rule enforcement | `npm run lint` with `'@typescript-eslint/no-explicit-any': 'error'` = 0 errors, 4 warnings | The four remaining warnings are the pre-existing `react-hooks/exhaustive-deps` set recorded at SUBC-013 — no growth, warnings never fail the script |
+| Full regression net | `npm run build && npm run lint && npm run typecheck && npm test` exit 0 | Typing-only claim holds: 40 files / 299 tests before and after (identical counts to the pre-change baseline) |
+| Acceptance greps | `grep -rn "as any" src test` → empty; `grep -rn "as any" test` → empty; word-level `any` in src confined to comments and UI copy strings | No `any` cast remains anywhere in lint scope; future violations surface as CI lint errors |
+| Scope discipline | No runtime logic, workflow files, or generated files touched; `src/worker/app.ts` unchanged | The structural bindings types stay deliberate; the change is trivially revertible |
+

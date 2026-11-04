@@ -20,7 +20,7 @@ let authHeaders: Record<string, string>;
 let userId: string;
 
 beforeEach(async () => {
-  const { privateKey } = (globalThis as any).__testAccessKey;
+  const { privateKey } = globalThis.__testAccessKey;
   const token = await makeAccessToken(privateKey, { email: "staff@example.com" });
   authHeaders = accessHeaders(token);
   const res = await SELF.fetch("https://example.com/api/me", { headers: authHeaders });
@@ -371,7 +371,7 @@ describe("request administration", () => {
 
 describe("event atomicity", () => {
   it("failed mutation writes neither data nor event", async () => {
-    const { privateKey } = (globalThis as any).__testAccessKey;
+    const { privateKey } = globalThis.__testAccessKey;
     const attackerHeaders = accessHeaders(
       await makeAccessToken(privateKey, { email: "staff@example.com" }),
     );

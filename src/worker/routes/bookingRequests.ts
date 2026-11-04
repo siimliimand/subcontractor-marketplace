@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { and, eq } from "drizzle-orm";
 import type { BatchItem } from "drizzle-orm/batch";
 import { drizzle } from "drizzle-orm/d1";
@@ -64,7 +64,7 @@ bookingRouter.use("/requests/:id/*", async (c, next) => {
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-async function getRequestOr404(c: any, id: string) {
+async function getRequestOr404(c: Context<AppEnv>, id: string) {
   const db = drizzle(c.env.DB);
   const row = (await db.select().from(requests).where(eq(requests.id, id)).limit(1))[0];
   if (!row) {
@@ -500,7 +500,7 @@ bookingRouter.post("/requests/:id/bookings/reschedule", async (c) => {
   return c.json(proposal, 201);
 });
 
-async function getProposalContext(c: any, requestId: string, proposalId: string) {
+async function getProposalContext(c: Context<AppEnv>, requestId: string, proposalId: string) {
   const db = drizzle(c.env.DB);
   const proposal = (
     await db.select().from(bookingReschedules).where(eq(bookingReschedules.id, proposalId)).limit(1)

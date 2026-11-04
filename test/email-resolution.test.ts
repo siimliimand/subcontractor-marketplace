@@ -25,7 +25,7 @@ const db = () => drizzle(env.DB);
 let authHeaders: Record<string, string>;
 
 beforeEach(async () => {
-  const { privateKey } = (globalThis as any).__testAccessKey;
+  const { privateKey } = globalThis.__testAccessKey;
   authHeaders = accessHeaders(
     await makeAccessToken(privateKey, { email: "staff@example.com" }),
   );

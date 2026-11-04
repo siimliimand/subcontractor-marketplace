@@ -19,7 +19,7 @@ const SECRET = env.EMAIL_TOKEN_SECRET;
 let authHeaders: Record<string, string>;
 
 beforeEach(async () => {
-  const { privateKey } = (globalThis as any).__testAccessKey;
+  const { privateKey } = globalThis.__testAccessKey;
   const token = await makeAccessToken(privateKey, { email: "staff@example.com" });
   authHeaders = accessHeaders(token);
   await SELF.fetch("https://example.com/api/me", { headers: authHeaders });

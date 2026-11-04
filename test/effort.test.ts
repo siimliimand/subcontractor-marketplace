@@ -9,7 +9,7 @@ const db = () => drizzle(env.DB);
 let authHeaders: Record<string, string>;
 
 beforeEach(async () => {
-  const { privateKey } = (globalThis as any).__testAccessKey;
+  const { privateKey } = globalThis.__testAccessKey;
   authHeaders = accessHeaders(
     await makeAccessToken(privateKey, { email: "staff@example.com" }),
   );
@@ -103,8 +103,10 @@ describe("append-only guarantee", () => {
     expect(before.length).toBeGreaterThan(0);
 
     // verify the API surface exposes no mutation of events: app router actions list
-    const { appPaths } = (await import("../src/worker/app")) as any;
-    const routes = appPaths?.() ?? [];
+    const appModule = await import("../src/worker/app");
+    const appPaths = (appModule as typeof appModule & Record<string, unknown>).appPaths;
+    const routes: string[] =
+      typeof appPaths === "function" ? (appPaths as () => string[])() : [];
     const mutatingEventRoutes = routes.filter((r: unknown) => {
       const path = String(r);
       return path.includes("audit") || path.includes("events");

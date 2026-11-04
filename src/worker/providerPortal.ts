@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { and, desc, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
 import {
@@ -73,7 +73,7 @@ type PortalUser = typeof providerUsers.$inferSelect;
 
 /** Resolves the active provider user from the session cookie, or null. */
 async function requireProviderUser(
-  c: any,
+  c: Context<{ Bindings: PortalEnv }>,
 ): Promise<{ user: PortalUser } | null> {
   const db = drizzle(c.env.DB);
   const session = await verifySession(cookieFrom(c.req.raw), sessionSecret(c.env));

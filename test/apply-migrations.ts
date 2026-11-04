@@ -94,7 +94,7 @@ beforeAll(async () => {
   }
 
   const key = await makeAccessKey();
-  (globalThis as any).__testAccessKey = key;
+  globalThis.__testAccessKey = key;
   fetchMock.activate();
   fetchMock.get(TEAM_DOMAIN).intercept({ path: "/cdn-cgi/access/certs" }).reply(
     200,
