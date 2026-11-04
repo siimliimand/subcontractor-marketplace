@@ -218,9 +218,12 @@ above; see also the decision-log entries “CI gate decision — 3 November
 - **A `ci-failure` issue means CI failed somewhere.** The `notify` job
   (`if: failure()`, `GITHUB_TOKEN` only, no secrets) creates it on the first
   failure and comments on it for subsequent failures (one open issue at a
-  time). Triage the linked run, fix, and **close the issue with a comment —
-  never delete it** (it is the alert history). The `ci-failure` label is
-  managed by the workflow; no setup needed.
+  time). The alert names the PR's head branch for `pull_request` runs
+  (`github.event.pull_request.head.ref`, env-mapped only — SUBC-018),
+  falling back to `ref_name` on push/workflow_dispatch; the merge ref
+  (`N/merge`) is never shown. Triage the linked run, fix, and **close the
+  issue with a comment — never delete it** (it is the alert history). The
+  `ci-failure` label is managed by the workflow; no setup needed.
 - **Founder notification layers:** GitHub's default failure email to the push
   actor (the siimliimand token drives all pushes) plus the repo watch
   subscription — **confirmed active 2026-11-04** (`PUT /subscription`

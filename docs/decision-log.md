@@ -93,6 +93,27 @@ branch apply to direct pushes as well, independent of `strict=false`. Enforcemen
 supporting PR-based landing (fix plan FIX-6). Probe artifacts (`ci-gate-probe/20261104`, PR #1)
 remain as pilot evidence.
 
+**Addendum (2026-11-04, SUBC-018): the failure alert now names the branch the failure lives
+on.** Pre-fix, a `pull_request` run's alert cited the merge ref — the live ci-failure issue #2
+comment from run 41796944020 read `CI failed on 1/merge (event: pull_request)` because
+`github.ref_name` on a PR run is the checkout's merge ref (`refs/pull/N/merge`). The `notify`
+job's `REF` env now maps `${{ github.event.pull_request.head.ref || github.ref_name }}`: the
+PR head branch for pull_request runs, `ref_name` unchanged for push/workflow_dispatch (issue
+title and body both consume the same `REF` env var). The expression stays in the env mapping
+only — fork head refs are attacker-influenced input, and direct `${{ }}` interpolation into the
+`run:` script is the documented injection vector this workflow avoids; the mapping's semantics
+are mirrored 1:1 by the pure helper `scripts/ci-alert-branch.mjs` (unit matrix + `?raw` wiring
+assertions in `test/ci-alert-branch.test.ts`, including a single-occurrence guard on the
+expression). Live probe evidence (2026-11-04): on probe branch `ci-gate-probe/20261104-headref`,
+the failing push run 41846494302 created ci-failure issue #4 with body `CI failed on
+ci-gate-probe/20261104-headref (event: push)` (push behavior byte-for-byte unchanged), and
+draft PR #5's failing pull_request run 41846832872 commented on the same issue: `CI failed on
+ci-gate-probe/20261104-headref (event: pull_request)` — the head branch, no `/merge`. The
+comment's Commit sha (`b0c3413`) is the merge-ref test commit, proving the run executed on the
+merge ref while the alert named the head branch. Probe artifacts cleaned up per procedure (PR
+#5 closed unmerged, probe branch deleted, issue #4 closed with an explanatory comment and kept
+as alert history).
+
 ## Merge-gate re-enable evaluation — 2026-11-04 (SUBC-014)
 
 **Decision: NO-GO — ruleset 26516182 stays enforcement `disabled` (parked); re-activation
