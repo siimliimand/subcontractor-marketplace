@@ -136,7 +136,34 @@ trigger is now automated.
   tip). A non-zero exit is a **landing failure** — treat it exactly like a
   failed check: do not start the next merge, surface it in the task log.
   `--check` is the read-only probe (`ahead/behind` report; exit 1 on drift,
-  never pushes, never touches the alert file).
+  never pushes, never touches the alert file). SUBC-028 (2026-11-05) made this
+  rule checkable and expanded it into the mandatory numbered sequence in the
+  "Landing checklist (SUBC-028)" below, verified by the read-only
+  `scripts/verify-landing-gate.mjs` checker.
+- **Landing checklist (SUBC-028, 2026-11-05 — ACTIVE NOW; expands the gate
+  rule above into a checkable sequence):** every landing on `main` ends with
+  this numbered mandatory sequence, in order:
+  1. Confirm the landing reached local `main` (the landed tip resolves via
+     `git rev-parse main`; worktree sessions share refs with the primary
+     checkout).
+  2. Run `node scripts/push-main-when-ahead.mjs` and require exit 0. A
+     non-zero exit is a landing failure — handle it exactly per the Drift
+     response bullet below (never force-push, never merge further work onto
+     `main` until currency is restored).
+  3. Run `node scripts/verify-landing-gate.mjs` and require exit 0. The
+     checker is read-only (never pushes, never takes the gate lock, never
+     writes `auto-push.log` or the alert file) and proves BOTH legs: the gate
+     recorded a successful run for the tip in
+     `~/.local/state/ci-currency/auto-push.log`, and currency holds (the
+     chained `scripts/verify-ci-currency.mjs` exits 0).
+  4. Record in the task log: the gate exit code, the pushed tip sha, the
+     Actions run id/URL, and the checker OK line.
+
+  Enforcement: a landing whose task log lacks a passing checker run is NOT
+  complete. Any task or audit can re-verify any past landing with
+  `node scripts/verify-landing-gate.mjs <full-tip-sha>`; `--strict` demands
+  the tip-named push evidence (used for forensics on tips pushed outside the
+  gate).
 - **Scheduled trigger (10-min tick) — one-time operator install.** The fusion
   user's crontab spool is not writable by agent identities on this host
   (verified 2026-11-03: `crontab -l` → `Permission denied`; no sudo; crond

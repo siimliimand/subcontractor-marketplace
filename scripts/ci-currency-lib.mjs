@@ -157,3 +157,197 @@ export function isLockStale(ageMs, pidAlive) {
   if (pidAlive !== true) return true;
   return ageMs >= LOCK_STALE_MS;
 }
+
+/* -------------------------------------------------------------------------
+ * Landing-gate evidence grammar (SUBC-028).
+ *
+ * The watchdog appends every run's outcome to
+ * ~/.local/state/ci-currency/auto-push.log as `<ISO-8601 ts> <message>`.
+ * Only two message shapes prove a gate SUCCESS, and they are pinned here
+ * verbatim so a skipped landing can never pass verification:
+ *
+ *   push-main-when-ahead: OK main pushed and green (tip <40-hex>, run id <digits>)
+ *   push-main-when-ahead: OK currency current (main == origin/main); nothing to push
+ *
+ * Everything else the gate writes (FAIL lines, `--check` probe lines, and the
+ * intermediate push/poll/verify narration) is deliberately non-evidence.
+ * SUBC-020 diagnosed three landings skipped without a gate run; this grammar
+ * is what makes that skip machine-detectable (consumed by
+ * scripts/verify-landing-gate.mjs, the read-only landing checker).
+ * ------------------------------------------------------------------------- */
+
+/** Leading `<ISO-8601> ` prefix as written by the watchdog's appendLog (Z only). */
+const GATE_LOG_TS_PREFIX_RE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z)\s+(.+)$/;
+/** Verbatim success line emitted after a push reached origin and CI went green. */
+const GATE_PUSH_OK_RE =
+  /^push-main-when-ahead: OK main pushed and green \(tip ([0-9a-f]{40}), run id=(\d+)\)$/i;
+/** Verbatim success line emitted when currency already held (nothing to push). */
+const GATE_NOOP_OK_PREFIX = "push-main-when-ahead: OK currency current";
+/** Failure lines start with this prefix followed by a space and the detail. */
+const GATE_FAIL_PREFIX = "push-main-when-ahead: FAIL";
+/** Report-only probe lines carry the `--check` marker and are never evidence. */
+const GATE_CHECK_PREFIX = "push-main-when-ahead --check:";
+
+/** @param {string} iso @returns {number | null} epoch ms, or null when unparseable */
+function toEpochMs(iso) {
+  if (typeof iso !== "string" || iso === "") return null;
+  const ms = Date.parse(iso);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+/**
+ * Classify one line of ~/.local/state/ci-currency/auto-push.log.
+ *
+ * Recognizes an optional leading ISO-8601 timestamp, then the gate's own
+ * grammars: the tip-named push success (→ "push-ok", tip lowercased, run id
+ * captured), the currency-current success (→ "noop-ok"), FAIL lines (→
+ * "fail"), and `--check` probe lines (→ "check"). Any other line — including
+ * the gate's intermediate push/poll/verify narration and malformed lookalikes
+ * — classifies as "other" with ALL fields null.
+ *
+ * @param {string} line raw log line (timestamped or bare)
+ * @returns {{ ts: string | null, kind: "push-ok" | "noop-ok" | "fail" | "check" | "other", tip: string | null, runId: string | null }}
+ */
+export function parseGateEvidenceLine(line) {
+  const raw = typeof line === "string" ? line : "";
+  const prefixed = GATE_LOG_TS_PREFIX_RE.exec(raw);
+  const ts = prefixed !== null ? prefixed[1] : null;
+  const body = (prefixed !== null ? prefixed[2] : raw).trim();
+
+  const pushOk = GATE_PUSH_OK_RE.exec(body);
+  if (pushOk !== null) {
+    return { ts, kind: "push-ok", tip: pushOk[1].toLowerCase(), runId: pushOk[2] };
+  }
+  if (body.startsWith(GATE_NOOP_OK_PREFIX)) {
+    return { ts, kind: "noop-ok", tip: null, runId: null };
+  }
+  if (body === GATE_FAIL_PREFIX || body.startsWith(`${GATE_FAIL_PREFIX} `)) {
+    return { ts, kind: "fail", tip: null, runId: null };
+  }
+  if (body.startsWith(GATE_CHECK_PREFIX)) {
+    return { ts, kind: "check", tip: null, runId: null };
+  }
+  return { ts: null, kind: "other", tip: null, runId: null };
+}
+
+/**
+ * Decide whether the watchdog log proves the landing gate ran for `tip`.
+ *
+ * Scans newest-first (the log is append-only and chronological). Strict mode
+ * (allowNoopFallback === false) accepts ONLY a push-ok line whose tip equals
+ * `tip` case-insensitively — the direct "the gate pushed exactly this commit
+ * and watched CI go green" proof, used for forensics. Default mode
+ * additionally accepts the newest noop-ok line whose timestamp parses at or
+ * after the tip's committer time: a gate run that observed currency already
+ * holding proves the tip was published (paired with the live currency check
+ * the read-only verifier chains, this cannot mask an unpublished tip).
+ *
+ * Returns `{ found, evidence, reason }`; `reason` is a diagnostic string in
+ * EVERY case (named failure mode when not found, evidence summary when found)
+ * so the checker can print exactly why a landing failed verification.
+ *
+ * @param {string[]} lines log lines in chronological (oldest-first) order
+ * @param {string} tip full 40-hex sha of the landing tip under audit
+ * @param {{ committedAtIso: string | null, allowNoopFallback: boolean }} opts
+ * @returns {{ found: boolean, evidence: ({ ts: string | null, kind: "push-ok" | "noop-ok" | "fail" | "check" | "other", tip: string | null, runId: string | null, line: string }) | null, reason: string }}
+ */
+export function findLandingEvidence(lines, tip, opts) {
+  const arr = Array.isArray(lines) ? lines : [];
+  const optsSafe = opts ?? {};
+  const tipNorm = typeof tip === "string" ? tip.trim().toLowerCase() : "";
+  if (!/^[0-9a-f]{40}$/.test(tipNorm)) {
+    return {
+      found: false,
+      evidence: null,
+      reason: `invalid tip argument "${String(tip)}": expected a full 40-hex sha`,
+    };
+  }
+  if (arr.length === 0) {
+    return {
+      found: false,
+      evidence: null,
+      reason: "landing-gate log is empty: no lines to scan",
+    };
+  }
+
+  const allowNoop = optsSafe.allowNoopFallback === true;
+  const committedAtMs = toEpochMs(typeof optsSafe.committedAtIso === "string" ? optsSafe.committedAtIso : null);
+
+  let pushOkCount = 0;
+  let noopOkCount = 0;
+  let newestNoop = null;
+
+  for (let i = arr.length - 1; i >= 0; i--) {
+    const rawLine = arr[i];
+    const parsed = parseGateEvidenceLine(typeof rawLine === "string" ? rawLine : "");
+    if (parsed.kind === "other") continue;
+    if (parsed.kind === "push-ok") {
+      pushOkCount += 1;
+      if (parsed.tip !== null && parsed.tip === tipNorm) {
+        return {
+          found: true,
+          evidence: { ...parsed, line: typeof rawLine === "string" ? rawLine : "" },
+          reason:
+            `push-ok gate evidence names tip ${tipNorm} ` +
+            `(run id=${parsed.runId ?? "?"}, evidence ts=${parsed.ts ?? "unknown"})`,
+        };
+      }
+      continue;
+    }
+    if (parsed.kind === "noop-ok") {
+      noopOkCount += 1;
+      if (newestNoop === null) newestNoop = parsed; // newest-first scan: first seen is newest
+      if (allowNoop && committedAtMs !== null) {
+        const noopMs = toEpochMs(parsed.ts);
+        if (noopMs !== null && noopMs >= committedAtMs) {
+          return {
+            found: true,
+            evidence: { ...parsed, line: typeof rawLine === "string" ? rawLine : "" },
+            reason:
+              `noop-ok gate evidence at ${parsed.ts} is at/after the tip commit time ` +
+              `${String(optsSafe.committedAtIso)}: the gate observed currency current on this tip`,
+          };
+        }
+      }
+      continue;
+    }
+    // "fail" and "check" lines carry no positive evidence; keep scanning.
+  }
+
+  if (newestNoop !== null && allowNoop && committedAtMs !== null) {
+    const noopMs = toEpochMs(newestNoop.ts);
+    if (noopMs === null) {
+      return {
+        found: false,
+        evidence: null,
+        reason:
+          `only noop-ok evidence exists and its line lacks a parseable timestamp, ` +
+          `so it cannot be shown to postdate the tip commit time ${String(optsSafe.committedAtIso)}`,
+      };
+    }
+    if (noopMs < committedAtMs) {
+      return {
+        found: false,
+        evidence: null,
+        reason:
+          `only noop-ok evidence exists and the newest one (ts ${String(newestNoop.ts)}) ` +
+          `predates the tip commit time ${String(optsSafe.committedAtIso)}: the gate has not ` +
+          `observed currency at/after this landing`,
+      };
+    }
+  }
+
+  const strictNote = allowNoop ? "" : " (strict mode: only tip-named push-ok evidence counts)";
+  const commitTimeNote =
+    allowNoop && committedAtMs === null
+      ? "; the noop-ok fallback cannot apply because the tip commit time is unknown"
+      : "";
+  return {
+    found: false,
+    evidence: null,
+    reason:
+      `no gate success evidence for tip ${tipNorm}: scanned ${String(arr.length)} line(s) ` +
+      `(${String(pushOkCount)} push-ok, ${String(noopOkCount)} noop-ok, rest non-evidence) ` +
+      `with none naming this tip${strictNote}${commitTimeNote}`,
+  };
+}
