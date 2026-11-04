@@ -447,3 +447,107 @@ Evidence (2026-11-05, SUBC-028, worktree `subc-028` — filled live at execution
 | Test suite before → after | 42 files / 332 tests (Step 0 baseline) → 43 files / 353 tests: +21 assertion-bearing tests in `test/landing-gate-evidence.test.ts` (≥13 required); `test/ci-currency-guard.test.ts` byte-identical to main, 32/32 inside the 53/53 targeted run | The lib additions are purely additive — no existing consumer or test was touched, and the new grammar guards are real assertions on the watchdog's own line shapes |
 | Full single-package gate | CI order, all exit 0: `npm run lint` (0 errors) → `npm run build` → `npm run typecheck` → `npm test` (43/43 files, 353/353 tests) | The repo's standard gate is green at the exact moment the enforcement lands |
 
+## Local worktree and branch audit — 2026-11-04 (SUBC-026)
+
+**Decision: the local task-branch and worktree inventory is now classified end-to-end with
+recorded evidence; the one closed-work orphan branch `fusion/subc-006` (`048acdc`) is deleted
+locally after a rescue pin (`rescue/fusion-subc-006` → `048acdc`, never pushed) and a
+three-gate zero-loss proof; `fusion/subc-009` (`5a47d3e`) is DEFERRED — untouched because
+its owning task is open-but-paused pending the operator's duplicate decision (its
+`resumeLimboTipSha` is exactly the branch tip, so deleting it would break the engine's
+documented resume path and pre-empt that decision); the `subc-021` worktree and its
+checked-out stale-based branch are handed to the operator as exact commands (this sandbox
+cannot touch another worktree's path — boundary probe recorded verbatim below); and scope
+was strictly local-only — origin, the push gate, and the watchdog automation were never
+touched (owned by SUBC-025/SUBC-027/SUBC-028/SUBC-030).**
+
+Execution-time drift (live reading authoritative per spec; audit executed 2026-11-04 ~20:45
++0100): main advanced `530360c`→`84a1eb7` (SUBC-025 landing)→`4fb75f0` (SUBC-028 landing)
+DURING the preflight; `fusion/subc-016` and `fusion/subc-027` branches+worktrees were
+reclaimed by engine recovery ("[recovery] tip-already-merged … stale-cached-metadata-ghost-
+conflict") while their owning tasks remain open todo; `fusion/subc-012` gained a worktree;
+new open tasks SUBC-029/SUBC-030 appeared with branches/worktrees; and the SUBC-009
+store/artifact divergence was reconfirmed (fn_task_show not-found vs live open-paused
+artifact — the artifact is authoritative).
+
+Provenance:
+
+- All four stale tips (`048acdc` subc-006, `5a47d3e` subc-009, `a5e1ab1` subc-012,
+  `a50b4b3` subc-021) are single engine-created `chore(SUBC-XXX): import dependency
+  content from main` commits (reflogs: "branch: Created from <base>" plus one commit,
+  nothing else) whose trees snapshot past main states — zero task-specific content by
+  construction, which is why tree-identity proof plus a rescue pin makes deletion
+  zero-loss. Provenance alone never authorizes deletion: the owning-task gate decides
+  (006 closed → RETIRE; 009 open-paused → DEFER; 012 open → ACTIVE-KEEP; 021 stale-based
+  and sandbox-untouchable → HANDOFF).
+- Engine pickup-reset evidence: the planner's subc-016 reflog proof ("reset: moving to
+  530360c…") died with that branch's reclaim; the live replacement proof is this task's
+  OWN branch reflog — `fusion/subc-026`: "branch: Created from 530360c" → "commit:
+  chore(SUBC-026): import dependency content from main" → "rebase (finish):
+  refs/heads/fusion/subc-026 onto 84a1eb7" — the engine heals open-task branches onto
+  current main at pickup.
+- `fusion/subc-021`'s reflog shows creation from OLD main `5637fba` (2026-11-04 12:16:47
+  +0100) and no reset ever — the surviving stale base this audit exists to eliminate.
+- Premise drift vs the task description, recorded: subc-016/subc-027 fully reclaimed
+  (a better end state than the planner expected — no stale object at all); subc-023
+  already retired pre-task; SUBC-009's owning task present-and-paused rather than absent.
+
+Evidence (2026-11-04, SUBC-026, worktree `subc-026`; main = `4fb75f0` at reading;
+full per-ref commands and outputs in task document key=audit on SUBC-026):
+
+| Ref / worktree | Tip | Ancestor of main | Tree identity | Owning task | Classification | Action / result |
+|---|---|---|---|---|---|---|
+| main | `4fb75f0` | — | — | — | mainline | never mutated by this task |
+| fusion/subc-006 (no worktree) | `048acdc` | no (merge-base `59b5a3c`) | == `41ce310` "Archive phase-3 and phase-4 changes…", diff empty | SUBC-006 archived — store + task.json artifact agree | RETIRE | Gate A closed both channels; Gate B diff empty; Gate C no worktree; pinned `rescue/fusion-subc-006`; `branch -d` refused ("not fully merged", recorded); `branch -D` deleted |
+| fusion/subc-009 (no worktree) | `5a47d3e` | no (merge-base `82aa7ef`) | == `274053d` "SUBC-007: restore GitHub push transport…", diff empty | SUBC-009 open-but-paused, duplicate-decision-required; artifact authoritative; resumeLimboTipSha == `5a47d3e` | DEFER | untouched; conditional post-decision recipe in action items |
+| fusion/subc-012 + worktree subc-012 | `a5e1ab1` | no (merge-base `82aa7ef`) | == `3d117da` "SUBC-004: sync stale status claims…", diff empty | SUBC-012 todo (parked on founder input, dep SUBC-029) | ACTIVE-KEEP | untouched; engine resets at pickup |
+| fusion/subc-021 + worktree subc-021 | `a50b4b3` | no (merge-base `5637fba` = OLD main) | == `f07eb93` "SUBC-015: fix MTR import format drift…", diff empty | SUBC-021 todo (unstarted; queued for dispatch during this audit) | HANDOFF | operator commands in action items, with live-state caveat |
+| fusion/subc-025 + worktree subc-025 | `0378235` | no (merge-base `530360c`) | == `84a1eb7` — its own landing, diff empty | SUBC-025 in-review | ACTIVE-KEEP | untouched; engine owns branch lifecycle |
+| fusion/subc-026 + worktree subc-026 (self) | `84a1eb7` | yes | — | SUBC-026 in-progress | ACTIVE-KEEP | this task's branch; its reflog is the pickup-reset proof |
+| fusion/subc-028 + worktree subc-028 | `154f864` | no (merge-base `530360c`) | == `4fb75f0` — its own landing, diff empty | SUBC-028 in-review | ACTIVE-KEEP | untouched; engine owns branch lifecycle |
+| fusion/subc-029 + worktree subc-029 | `530360c` | yes | — | SUBC-029 todo (planning) | ACTIVE-KEEP | untouched; clean current base |
+| fusion/subc-030 + worktree subc-030 | `cbafff9` | no (merge-base `530360c`) | == `84a1eb7` (bare import pattern) | SUBC-030 todo (planning) | ACTIVE-KEEP | untouched |
+| mission/M-MW0Y99TK-0001-QM7G | `4bc5dc0` | no (merge-base `3d117da`) | not assessed — out of scope | mission active | RECORD-ONLY | mission lifecycle owned by the mission system |
+| .ai-merge clean room (detached `4fb75f0`) | `4fb75f0` | — | — | engine merger (SUBC-028 landing) | RECORD-ONLY | engine transient; engine removed it during this audit |
+| fusion/subc-016, fusion/subc-027 | (gone) | — | — | tasks open todo, branchless | RECORD-ONLY | engine tip-already-merged reclaims during preflight; recreated at dispatch |
+| fusion/subc-023 | (gone) | — | — | SUBC-023 done | RECORD-ONLY | already retired pre-task |
+
+Sandbox boundary (verbatim): `git -C ../subc-021 rev-parse --abbrev-ref HEAD` → "Command
+targets a path outside the worktree boundary. Commands must run inside the worktree."
+(identical rejection for `../subc-016`, whose worktree is since reclaimed). Cross-worktree
+dirtiness is unverifiable from a task sandbox — recorded as such; `git worktree remove`
+refuses dirty worktrees by itself, which is the handoff's built-in safety net.
+
+Divergence-hazard rationale (recorded for every RETIRE/DEFER/HANDOFF item whose tip is not
+an ancestor of main): landing a non-ancestor branch whose tree is byte-identical to an
+in-main commit via an executor tip-chain push racing the engine squash re-creates the
+SHA-level identical-tree divergence repaired in SUBC-019 Step 3 / SUBC-023 (the agents.md
+single-writer contract SUBC-025 codified now prohibits the executor-side trigger). Deletion
+— not rebase — is correct: tree-identity proves zero unique content, so a rebase would
+produce an empty-diff rewrite that only re-dates the import.
+
+Durable policy established by this audit: local `fusion/*` branches of closed/archived
+tasks are retired only after BOTH the task store and the `task.json` artifact confirm
+closure, always with a rescue pin first; branches of open tasks — including paused-open
+tasks awaiting operator decisions — are never touched (the engine resets them onto current
+main at pickup, proven live by the fusion/subc-026 reflog); `mission/*` refs and remote
+refs are out of scope for task-branch hygiene.
+
+**OPERATOR ACTION ITEMS (recorded for the operator; agents must not execute these):**
+
+1. `subc-021` stale-base retirement — run from the primary checkout, and ONLY after
+   re-verifying SUBC-021's task state (it was queued for dispatch behind an active
+   file-scope lease during this audit; if it has started or completed by then, re-classify
+   first — a completed landing makes these commands the standard post-finalization
+cleanup, an in-flight execution means wait):
+   (a) `git diff --shortstat fusion/subc-021 f07eb93` — expect EMPTY output (zero-content
+   proof; the equivalent diff was verified live from the audit worktree);
+   (b) `git worktree remove .fusion/worktrees/subc-021` — if git refuses because the
+   worktree is dirty, inspect and decide (the task is unstarted, so dirt is not expected);
+   (c) `git branch -D fusion/subc-021` — `branch -d` would refuse (tip is not an
+   ancestor); `-D` is safe only after (a).
+2. Conditional `fusion/subc-009` retirement — run ONLY after the pending duplicate
+   decision resolves against SUBC-009 (duplicate confirmed, task closed/archived; never
+   while the task is paused-open): `git tag rescue/fusion-subc-009 5a47d3e` then
+   `git branch -D fusion/subc-009`.
+
