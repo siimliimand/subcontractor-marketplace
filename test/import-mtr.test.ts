@@ -225,6 +225,102 @@ describe("zero-upsert format-drift guard (scripts/fixtures/mtr-format-drift.xml)
   });
 });
 
+describe("read-only dry-run diagnostics (SUBC-029)", () => {
+  it("(a) luba fixture: diagnostics with the matched IN list, zero writes, comments intact", () => {
+    const plan = buildImportPlan(lubaFixture, { ...planOpts, dryRun: true });
+    expect(plan.dryRun).toBe(true);
+    expect(plan.guarded).toBe(false);
+    expect(plan.dryRunSql).not.toBeNull();
+    const sql = planToSql(plan);
+    // read-only guarantee
+    expect(sql).not.toContain("INSERT INTO company_verifications");
+    expect(sql).not.toContain("UPDATE company_verifications");
+    // diagnostics: the three SELECTs with the matched codes in the IN lists
+    expect(sql).toContain("SELECT status, COUNT(*) AS row_count");
+    expect(sql).toContain("SELECT COUNT(*) AS would_expire");
+    expect(sql).toContain("SELECT COUNT(*) AS matched_companies");
+    expect((sql.match(/IN \('11111111'/g) ?? []).length).toBe(2);
+    expect(sql).toContain("'0146519-2','1000000012')");
+    expect(sql).toContain("'(SIRET) 841''489 123 00015'");
+    // header and projection summary intact
+    expect(sql).toContain(plan.headerComment);
+    expect(
+      sql.trimEnd().endsWith(
+        "-- summary: 10 trade-notification rows would be upserted across 9 undertakers (dry-run — no writes emitted)",
+      ),
+    ).toBe(true);
+    // structurally: only the three diagnostics SELECTs are executable
+    const statements = toStatements(sql);
+    expect(statements).toHaveLength(3);
+    expect(statements.every((s) => /^SELECT/i.test(s))).toBe(true);
+  });
+
+  it("(b) legacy fixture: both layouts flow through dry-run with the same shape", () => {
+    const plan = buildImportPlan(legacyFixture, { ...planOpts, dryRun: true });
+    expect(plan.dryRun).toBe(true);
+    const sql = planToSql(plan);
+    expect(sql).not.toContain("INSERT INTO company_verifications");
+    expect(sql).not.toContain("UPDATE company_verifications");
+    expect((sql.match(/IN \('12345678','34567890'\)/g) ?? []).length).toBe(2);
+    expect(
+      sql.trimEnd().endsWith(
+        "-- summary: 3 trade-notification rows would be upserted across 2 undertakers (dry-run — no writes emitted)",
+      ),
+    ).toBe(true);
+    const statements = toStatements(sql);
+    expect(statements).toHaveLength(3);
+    expect(statements.every((s) => /^SELECT/i.test(s))).toBe(true);
+  });
+
+  it("(c) drift fixture: guard warning present, diagnostics still emitted with IN ('')", () => {
+    const plan = buildImportPlan(driftFixture, { ...planOpts, dryRun: true });
+    expect(plan.guarded).toBe(true);
+    expect(plan.dryRunSql).not.toBeNull();
+    const sql = planToSql(plan);
+    expect(sql).toContain("-- GUARD:");
+    expect(sql).not.toContain("INSERT INTO company_verifications");
+    expect(sql).not.toContain("UPDATE company_verifications");
+    expect((sql.match(/IN \(''\)/g) ?? []).length).toBe(2);
+    expect(
+      sql.trimEnd().endsWith(
+        "-- summary: 0 trade-notification rows would be upserted across 0 undertakers (dry-run — no writes emitted)",
+      ),
+    ).toBe(true);
+    const statements = toStatements(sql);
+    expect(statements).toHaveLength(3); // before-counts still reach D1 for a drifted file
+  });
+
+  it("(d) dry-run + force-expire: no write statements; the override is ignored with a warning", () => {
+    const plan = buildImportPlan(driftFixture, { ...planOpts, dryRun: true, forceExpire: true });
+    expect(plan.guarded).toBe(false);
+    const sql = planToSql(plan);
+    expect(sql).not.toContain("INSERT INTO company_verifications");
+    expect(sql).not.toContain("UPDATE company_verifications");
+    expect(sql).toContain("-- OVERRIDE IGNORED:");
+    expect(sql).not.toContain("-- OVERRIDE: --force-expire active");
+    expect(toStatements(sql)).toHaveLength(3); // dry-run wins unconditionally
+  });
+
+  it("emits no write statements on ANY fixture, in both dryRunSql and planToSql", () => {
+    const fixtures = [
+      ["legacy", legacyFixture],
+      ["luba", lubaFixture],
+      ["drift", driftFixture],
+    ] as const;
+    for (const [name, fixture] of fixtures) {
+      const plan = buildImportPlan(fixture, { ...planOpts, dryRun: true });
+      const texts = [plan.dryRunSql, planToSql(plan)].filter(
+        (t): t is string => t !== null,
+      );
+      expect(texts, name).toHaveLength(2);
+      for (const text of texts) {
+        expect(text, name).not.toContain("INSERT INTO company_verifications");
+        expect(text, name).not.toContain("UPDATE company_verifications");
+      }
+    }
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Integration: file → plan → planToSql → real miniflare D1 (cloudflare:test).
 // Executes the exact SQL the CLI emits and asserts the resulting rows.
@@ -480,6 +576,38 @@ describe("integration: luba-format import SQL against miniflare D1", () => {
     expect(rows).toHaveLength(1); // and no upsert rows were created
     const registry = (await registryRows()) as Row[];
     expect(registry[0]!.status).toBe("valid");
+  });
+
+  it("(e) dry-run bundle at the D1 level: correct projections, zero row changes", async () => {
+    await seed();
+    const sql = planToSql(buildImportPlan(lubaFixture, { ...planOpts, dryRun: true }));
+
+    // Structurally read-only: exactly the three diagnostics SELECTs.
+    const statements = toStatements(sql);
+    expect(statements).toHaveLength(3);
+    expect(statements.every((s) => /^SELECT/i.test(s))).toBe(true);
+
+    // (1) before-counts: exactly the seeded mtr:% trade row (77777777, valid);
+    // the registry_active row is ariregister:… so it stays outside the counts.
+    const before = await env.DB.prepare(statements[0]!).all<{ status: string; row_count: number }>();
+    expect(before.results).toEqual([{ status: "valid", row_count: 1 }]);
+
+    // (2) expiry projection: 77777777 is absent from the luba matched set and
+    // its checkedAt is past the plan stamp — the one row the UPDATE would flip.
+    const projection = await env.DB.prepare(statements[1]!).all<{ would_expire: number }>();
+    expect(projection.results[0]!.would_expire).toBe(1);
+
+    // (3) matched companies present: five of the nine luba codes exist in
+    // companies (the four foreign codes match no company row → no-op upserts).
+    const matched = await env.DB.prepare(statements[2]!).all<{ matched_companies: number }>();
+    expect(matched.results[0]!.matched_companies).toBe(5);
+
+    // Executing the whole bundle changes zero rows in either table.
+    const tradeBefore = await tradeRows();
+    const companiesBefore = await db().select().from(companies);
+    await runImportSql(sql);
+    expect(await tradeRows()).toEqual(tradeBefore);
+    expect(await db().select().from(companies)).toEqual(companiesBefore);
   });
 
   it("legacy-format import SQL still lands its three rows and expires the absent company", async () => {

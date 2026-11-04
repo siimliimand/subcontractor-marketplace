@@ -27,9 +27,28 @@
   script to emit SQL, apply with `wrangler d1 execute … --file`.
 - **Dry-run first (SUBC-015):** always emit the SQL to a scratch file and read
   the `-- summary:` line BEFORE applying — a healthy MTR import reads
-  `≈5,097 trade-notification rows upserted across ≈5,097 undertakers` (all six
-  trades). Only apply after the counts make sense; never pipe the import
-  straight into `d1 execute`.
+  `≈8,095 trade-notification rows upserted across ≈5,097 undertakers` (all six
+  trades; SUBC-015 measured baseline from the 2026-11-04 export — anything
+  near zero means drift, investigate, never force-expire). Only apply after
+  the counts make sense; never pipe the import straight into `d1 execute`.
+- **Read-only `--dry-run` diagnostics (SUBC-029):** before generating the real
+  SQL, run `node scripts/import-mtr.mjs <file.xml> --dry-run > dry-run.sql`
+  and apply that bundle to capture BEFORE counts — it contains ONLY three
+  SELECTs (current `mtr:%` trade-notification rows by status, the exact rows
+  the expire UPDATE would flip, and how many matched undertakers exist in
+  `companies`), so applying it writes nothing by construction. A guarded
+  dry-run (drifted file) still prints the diagnostics, then exits 1.
+  `--force-expire` is ignored under `--dry-run` (explicit warning, zero
+  writes — dry-run wins unconditionally). Then review the real SQL against
+  the projection. See the SUBC-029 reimport-runbook task document for the
+  full operator flow and expected count bands.
+- **Scratch files for operator downloads (SUBC-029):** keep register downloads
+  and emitted SQL inside a `.local`-suffixed directory such as
+  `mtr-scratch.local/` — the repo `.gitignore` `*.local` pattern matches the
+  DIRECTORY name, so every file inside it is ignored with no per-file naming
+  rule (a bare `ettevotjad.local.xml` file would NOT be ignored). The MTR
+  export download itself is browser-only: agent fetches are 403-blocked by
+  bot protection (verified 2026-11-05).
 - **MTR zero-upsert guard (SUBC-015):** if the export format drifts and the
   import finds ZERO upserts, the script emits NO expire-all UPDATE, prints a
   GUARD diagnostic to stderr naming the drift signal, and exits 1 — a drifted

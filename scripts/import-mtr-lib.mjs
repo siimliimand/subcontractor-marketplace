@@ -21,6 +21,13 @@
  * expire-all UPDATE is suppressed unless opts.forceExpire is set — a
  * format-drifted export must never flip every mtr:% trade_notification
  * row to 'invalid' in one pass. See docs/decision-log.md (SUBC-015).
+ *
+ * DRY-RUN MODE (SUBC-029): opts.dryRun renders a READ-ONLY bundle — the
+ * header comment, three diagnostics SELECTs (current mtr:% rows by status,
+ * the expiry projection mirroring the expire UPDATE's exact WHERE clause,
+ * and how many matched undertakers exist in companies), then a projection
+ * summary. No INSERT/UPDATE is ever emitted in dry-run, for ANY input;
+ * --force-expire is ignored under dry-run with an explicit warning.
  */
 
 import { XMLParser } from "fast-xml-parser";
@@ -195,6 +202,42 @@ function noticeValid(notice, today) {
 const sqlEscape = (s) => String(s).replace(/'/g, "''");
 
 /**
+ * READ-ONLY diagnostics block for dry-run plans (SUBC-029): three SELECT
+ * statements, zero writes —
+ *   (1) before-counts: current mtr:% trade_notification rows by status
+ *   (2) expiry projection: COUNT over the expire UPDATE's exact WHERE
+ *       clause (type, sourceDataset LIKE 'mtr:%', checkedAt < plan stamp,
+ *       NOT EXISTS matched-code company)
+ *   (3) matched-companies count: how many matched undertakers' upserts
+ *       will actually land in companies (the rest are harmless no-ops)
+ * matchedCodesList is the same quoted IN-list construction the expire
+ * statement uses (IN ('') when nothing matched).
+ */
+function dryRunDiagnostics(matchedCodesList, checkedAt) {
+  return `-- READ-ONLY DIAGNOSTICS (dry-run): three SELECT statements, zero writes
+-- (1) before-counts: current mtr:% trade_notification rows by status
+SELECT status, COUNT(*) AS row_count FROM company_verifications
+WHERE type = 'trade_notification'
+  AND sourceDataset LIKE 'mtr:%'
+GROUP BY status;
+
+-- (2) expiry projection: rows the real expire UPDATE would flip to 'invalid' (same WHERE clause)
+SELECT COUNT(*) AS would_expire FROM company_verifications
+WHERE type = 'trade_notification'
+  AND sourceDataset LIKE 'mtr:%'
+  AND checkedAt < '${checkedAt}'
+  AND NOT EXISTS (
+    SELECT 1 FROM companies c
+    WHERE c.id = company_verifications.companyId
+      AND c.registrationIdentifier IN (${matchedCodesList})
+  );
+
+-- (3) matched companies present: upserts that will actually land (the rest are no-ops)
+SELECT COUNT(*) AS matched_companies FROM companies
+WHERE registrationIdentifier IN (${matchedCodesList});`;
+}
+
+/**
  * Parse an MTR/Tarvik open-data XML export into an executable import plan.
  *
  * @param {string} xmlString the raw XML document text
@@ -207,6 +250,10 @@ const sqlEscape = (s) => String(s).replace(/'/g, "''");
  *   checkedAt and the header; defaults to the current UTC time
  * @param {boolean} [opts.forceExpire] emit the expire-all UPDATE even when
  *   zero upserts were produced (explicit override; adds a warning)
+ * @param {boolean} [opts.dryRun] render a READ-ONLY plan instead: the plan
+ *   carries dryRun/dryRunSql and planToSql emits only the header, the
+ *   diagnostics SELECTs, warnings, and a projection summary — never an
+ *   INSERT/UPDATE; forceExpire is ignored with an explicit warning
  * @returns the import plan consumed by planToSql
  * @throws when no undertaker entries can be located (unparseable file)
  */
@@ -216,6 +263,7 @@ export function buildImportPlan(xmlString, opts = {}) {
   const today = opts.today ?? new Date().toISOString().slice(0, 10);
   const now = opts.now ?? new Date().toISOString();
   const forceExpire = opts.forceExpire === true;
+  const dryRun = opts.dryRun === true;
 
   const doc = makeParser().parse(xmlString);
   const undertakers = findUndertakers(doc);
@@ -256,6 +304,8 @@ export function buildImportPlan(xmlString, opts = {}) {
   }
 
   const warnings = [];
+  const matchedCodesList =
+    [...perCompany.keys()].map((c) => `'${sqlEscape(c)}'`).join(",") || "''";
   let expireStatement = null;
   let guarded = false;
   if (upserts.length > 0 || forceExpire) {
@@ -268,7 +318,7 @@ WHERE type = 'trade_notification'
   AND NOT EXISTS (
     SELECT 1 FROM companies c
     WHERE c.id = company_verifications.companyId
-      AND c.registrationIdentifier IN (${[...perCompany.keys()].map((c) => `'${sqlEscape(c)}'`).join(",") || "''"})
+      AND c.registrationIdentifier IN (${matchedCodesList})
   );`;
   } else {
     guarded = true;
@@ -278,9 +328,21 @@ WHERE type = 'trade_notification'
         : `GUARD: extracted ${noticesSeen} trade notice(s) but none mapped to a cockpit trade (EMTAK prefixes 4321/4322/4331/4332/4333/4334) — refusing to expire existing mtr:% rows`,
     );
   }
-  if (forceExpire && upserts.length === 0) {
+  if (forceExpire && dryRun) {
+    warnings.push(
+      "OVERRIDE IGNORED: --force-expire has no effect under --dry-run — a dry run never emits INSERT/UPDATE; re-run without --dry-run to emit the real import SQL",
+    );
+  } else if (forceExpire && upserts.length === 0) {
     warnings.push("OVERRIDE: --force-expire active — emitting the expire-all UPDATE despite zero upserts");
   }
+
+  const headerComment = `-- MTR/Tarvik import ${now}: dataset ${ds}, ${undertakers.length} undertakers read, ${perCompany.size} with relevant notices, licence ${licence}`;
+  const summaryComment = dryRun
+    ? `-- summary: ${upserts.length} trade-notification rows would be upserted across ${perCompany.size} undertakers (dry-run — no writes emitted)`
+    : `-- summary: ${upserts.length} trade-notification rows upserted across ${perCompany.size} undertakers`;
+  const dryRunSql = dryRun
+    ? [headerComment, dryRunDiagnostics(matchedCodesList, checkedAt), summaryComment].join("\n\n") + "\n"
+    : null;
 
   return {
     undertakersRead: undertakers.length,
@@ -289,11 +351,13 @@ WHERE type = 'trade_notification'
     expireStatement,
     warnings,
     guarded,
+    dryRun,
+    dryRunSql,
     checkedAt,
     dataset: ds,
     licence,
-    headerComment: `-- MTR/Tarvik import ${now}: dataset ${ds}, ${undertakers.length} undertakers read, ${perCompany.size} with relevant notices, licence ${licence}`,
-    summaryComment: `-- summary: ${upserts.length} trade-notification rows upserted across ${perCompany.size} undertakers`,
+    headerComment,
+    summaryComment,
   };
 }
 
@@ -302,10 +366,23 @@ WHERE type = 'trade_notification'
  * comment, one INSERT ... ON CONFLICT upsert per (company, trade), the
  * expire-all UPDATE (when present), WARNING comments, summary comment.
  *
+ * A dry-run plan renders as header + diagnostics + warnings + projection
+ * summary — never the upsert rows, never the expire UPDATE (SUBC-029).
+ *
  * @param {ReturnType<typeof buildImportPlan>} plan
  * @returns {string}
  */
 export function planToSql(plan) {
+  if (plan.dryRun) {
+    // dryRunSql is header + diagnostics + summary (no warnings); splice the
+    // warnings in before the trailing summary block so it stays last.
+    const blocks = plan.dryRunSql.trimEnd().split("\n\n");
+    const summary = blocks.pop();
+    const parts = [...blocks];
+    for (const warning of plan.warnings) parts.push(`-- ${warning}`);
+    parts.push(summary);
+    return parts.join("\n\n") + "\n";
+  }
   const parts = [plan.headerComment];
   for (const upsert of plan.upserts) {
     parts.push(`INSERT INTO company_verifications

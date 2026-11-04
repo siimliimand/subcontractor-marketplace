@@ -551,3 +551,62 @@ cleanup, an in-flight execution means wait):
    while the task is paused-open): `git tag rescue/fusion-subc-009 5a47d3e` then
    `git branch -D fusion/subc-009`.
 
+## MTR dry-run diagnostics and re-import operator handoff — 2026-11-05 (SUBC-029)
+
+**Decision: the MTR import CLI gained a structurally read-only `--dry-run`
+mode (three diagnostics SELECTs, zero writes for ANY input), the SUBC-015
+format-drift fix was verified intact on HEAD rather than re-implemented, and
+the production re-import itself is HANDED TO THE OPERATOR via the
+`reimport-runbook` task document — recorded here as a handoff, NOT as
+applied.** Owner: operator (browser download + both `wrangler --remote`
+steps); engineering: dry-run mode + verification shipped here. Applying the
+runbook is what unblocks SUBC-012's ≥10-provider spot-check.
+
+**Verified, not rebuilt (Step 0 evidence, no commit):** HEAD `4fb75f0`
+carries the full SUBC-015 fix — dual-layout `noticesOf` (`/load|luba/i`),
+the staatus rule with `xsi:nil` open-endedness, `emtak`/`emtak2025`
+collection, and the zero-upsert guard with distinct extraction/mapping drift
+warnings; `mtr-luba-sample.xml` + `mtr-format-drift.xml` present;
+`mtr-sample.xml` untouched since `ed51619` (pre-dates SUBC-015; no commit
+after `f07eb93` modified it). Baseline `test/import-mtr.test.ts`: 21/21
+green before any SUBC-029 change.
+
+**What shipped (purely additive, no SUBC-015 logic touched):** `opts.dryRun`
+on `buildImportPlan` → plan fields `dryRun`/`dryRunSql`; `planToSql` renders
+dry-run plans as header + diagnostics + warnings + projection summary and
+never an INSERT/UPDATE; `--force-expire` under `--dry-run` is ignored with an
+explicit warning (dry-run wins unconditionally). CLI exit codes preserved
+(healthy dry-run 0; guarded dry-run 1 with the GUARD stderr while the
+diagnostics still print, so a drifted file yields before-counts). The
+diagnostics bundle is exactly three SELECTs: (1) current `mtr:%`
+trade-notification rows grouped by status; (2) the expiry projection COUNT
+mirroring the expire UPDATE's WHERE clause verbatim with the matched IN list
+(`IN ('')` when nothing matched); (3) how many matched undertakers exist in
+`companies` (the no-op upsert population stays visible). Test suite 21 → 27:
+dry-run unit cases across all three fixtures (incl. a no-writes case for
+`plan.dryRunSql` AND `planToSql` output) plus a miniflare D1 case executing
+the bundle and proving correct projections with zero row changes.
+
+**Why the apply is an operator runbook, not an agent step (live probes,
+2026-11-05, worktree `subc-029`):**
+
+| Probe | Observation |
+|---|---|
+| Fresh-export download | `https://mtr.ttja.ee/opendata/avaandmed_ettevotjad.xml` → HTTP 403 Forbidden, content-type `text/html`, 5,558-byte Cloudflare-style bot-challenge page (node fetch with full browser User-Agent/Accept headers; ONE attempt, no retries) — the operator downloads the file in a browser |
+| Remote D1 from the session | `CLOUDFLARE_API_TOKEN` absent from the session environment; the documented token location is outside the worktree sandbox boundary (path access rejected) — every `wrangler d1 execute … --remote` step is operator-owned, consistent with the standing "remote ops cannot run from the worktree" project note |
+
+**Expected count bands for the operator (SUBC-015 2026-11-04 baseline):**
+undertakers read ≈56,000–57,000; matched undertakers ≈5,000–5,200; upsert
+rows ≈8,000 (baseline 8,095; all six trades present); matched near zero or
+far outside the band = STOP and investigate — never `--force-expire`. Full
+six-step flow, hard-stop conditions, and guard/exit-code meanings live in
+the SUBC-029 task document `reimport-runbook`. Same edit corrected agents.md's
+stale pre-measurement band ("≈5,097 rows upserted across ≈5,097 undertakers")
+to the measured `≈8,095 rows across ≈5,097 undertakers`.
+
+**Re-evaluation trigger:** the operator's AFTER-counts follow-up (runbook
+step 6) recorded against this entry; any new export schema change (the
+dry-run bundle now makes drift visible before any write path); or SUBC-012's
+TTJA licence confirmation, which remains the gate for badge display
+(`MTR_BADGES_ENABLED`) — importing is safe, displaying is still not.
+

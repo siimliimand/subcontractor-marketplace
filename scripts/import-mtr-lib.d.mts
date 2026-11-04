@@ -40,6 +40,10 @@ export declare type ImportPlan = {
   expireStatement: string | null;
   warnings: string[];
   guarded: boolean;
+  /** True when built with opts.dryRun: planToSql emits read-only SQL only. */
+  dryRun: boolean;
+  /** Header + diagnostics SELECTs + projection summary (null when !dryRun). */
+  dryRunSql: string | null;
   checkedAt: string;
   dataset: string;
   licence: string;
@@ -54,6 +58,8 @@ export declare type BuildImportPlanOptions = {
   today?: string;
   now?: string;
   forceExpire?: boolean;
+  /** Read-only diagnostics mode: no INSERT/UPDATE is ever rendered (SUBC-029). */
+  dryRun?: boolean;
 };
 
 /** Parse an MTR/Tarvik open-data XML export into an executable import plan. */
