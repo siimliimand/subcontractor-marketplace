@@ -136,6 +136,75 @@ function openPixel(url: string) {
   return SELF.fetch(url);
 }
 
+describe("open pixel upgrades the entry delivery status (SUBC-011)", () => {
+  it("pixel fetch moves 'sent' → 'opened' on the entry row", async () => {
+    const provider = await createProvider(0);
+    const requestId = await createMatchedRequest();
+    const { trackUrlByRecipient } = await sendBatchAndExtractLinks(requestId, [provider]);
+    const company = (await db().select().from(companies).where(eq(companies.id, provider)))[0]!;
+    const entry = (
+      await db().select().from(outreachEntries).where(eq(outreachEntries.requestId, requestId))
+    )[0]!;
+    expect(entry.emailStatus).toBe("sent");
+
+    const res = await openPixel(trackUrlByRecipient.get(company.contactEmail)!);
+    expect(res.status).toBe(200);
+
+    const after = (
+      await db().select().from(outreachEntries).where(eq(outreachEntries.id, entry.id))
+    )[0]!;
+    expect(after.emailStatus).toBe("opened");
+  });
+
+  it("pixel fetch upgrades 'delivered' → 'opened'", async () => {
+    const provider = await createProvider(1);
+    const requestId = await createMatchedRequest();
+    const { trackUrlByRecipient } = await sendBatchAndExtractLinks(requestId, [provider]);
+    const company = (await db().select().from(companies).where(eq(companies.id, provider)))[0]!;
+    const entry = (
+      await db().select().from(outreachEntries).where(eq(outreachEntries.requestId, requestId))
+    )[0]!;
+    await db()
+      .update(outreachEntries)
+      .set({ emailStatus: "delivered" })
+      .where(eq(outreachEntries.id, entry.id));
+
+    const res = await openPixel(trackUrlByRecipient.get(company.contactEmail)!);
+    expect(res.status).toBe(200);
+
+    const after = (
+      await db().select().from(outreachEntries).where(eq(outreachEntries.id, entry.id))
+    )[0]!;
+    expect(after.emailStatus).toBe("opened");
+  });
+
+  it("an open on a 'bounced' entry still audits but keeps the terminal status", async () => {
+    const provider = await createProvider(2);
+    const requestId = await createMatchedRequest();
+    const { trackUrlByRecipient } = await sendBatchAndExtractLinks(requestId, [provider]);
+    const company = (await db().select().from(companies).where(eq(companies.id, provider)))[0]!;
+    const entry = (
+      await db().select().from(outreachEntries).where(eq(outreachEntries.requestId, requestId))
+    )[0]!;
+    await db()
+      .update(outreachEntries)
+      .set({ emailStatus: "bounced" })
+      .where(eq(outreachEntries.id, entry.id));
+
+    const res = await openPixel(trackUrlByRecipient.get(company.contactEmail)!);
+    expect(res.status).toBe(200);
+
+    const after = (
+      await db().select().from(outreachEntries).where(eq(outreachEntries.id, entry.id))
+    )[0]!;
+    expect(after.emailStatus).toBe("bounced");
+    // The open is still a fact: the audit event was recorded.
+    expect(
+      await db().select().from(auditEvents).where(eq(auditEvents.action, "email_opened")),
+    ).toHaveLength(1);
+  });
+});
+
 describe("email journey e2e (local mirror of staging task 7.4)", () => {
   it("batch send → pixel open → accept with capacity → funnel events + dashboard movement; second provider declines", async () => {
     // 1. Provider + request setup through the real API

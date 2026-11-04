@@ -35,6 +35,19 @@ type EmailMetrics = {
   manualQualified: number;
 };
 
+type ProviderEmailDeliveryRow = {
+  companyId: string;
+  legalName: string;
+  contactEmail: string;
+  sent: number;
+  delivered: number;
+  opened: number;
+  bounced: number;
+  skipped: number;
+  bounceRate: number | null;
+  suppressed: boolean;
+};
+
 dashboardRouter.get("/overview", async (c) => {
   const db = drizzle(c.env.DB);
   const from = c.req.query("from") ?? "1970-01-01";
@@ -203,6 +216,90 @@ dashboardRouter.get("/overview", async (c) => {
       conversion: bookingRequested === 0 ? null : bookingConfirmed / bookingRequested,
     },
     email,
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SUBC-011: per-provider email delivery breakdown. Denominator rule: `sent`
+// counts only mails actually dispatched (sent/delivered/opened/bounced) —
+// skipped entries never reached a mailbox and are reported separately, so
+// bounce rate stays honest. `delivered` includes opened (an opened mail was
+// delivered); `bounceRate` is null when nothing was sent.
+// ---------------------------------------------------------------------------
+dashboardRouter.get("/email-delivery", async (c) => {
+  const db = drizzle(c.env.DB);
+  const from = c.req.query("from") ?? "1970-01-01";
+  const to = c.req.query("to") ?? "9999-12-31";
+
+  const result = (await db.all<{
+    companyId: string;
+    legalName: string;
+    contactEmail: string;
+    sent: number;
+    delivered: number;
+    opened: number;
+    bounced: number;
+    skipped: number;
+    suppressed: number;
+  }>(sql`
+    SELECT c.id AS companyId, c.legalName AS legalName, c.contactEmail AS contactEmail,
+      COALESCE(SUM(CASE WHEN e.emailStatus IN ('sent','delivered','opened','bounced') THEN 1 ELSE 0 END), 0) AS sent,
+      COALESCE(SUM(CASE WHEN e.emailStatus IN ('delivered','opened') THEN 1 ELSE 0 END), 0) AS delivered,
+      COALESCE(SUM(CASE WHEN e.emailStatus = 'opened' THEN 1 ELSE 0 END), 0) AS opened,
+      COALESCE(SUM(CASE WHEN e.emailStatus = 'bounced' THEN 1 ELSE 0 END), 0) AS bounced,
+      COALESCE(SUM(CASE WHEN e.emailStatus = 'skipped' THEN 1 ELSE 0 END), 0) AS skipped,
+      EXISTS(SELECT 1 FROM email_suppressions s WHERE s.email = c.contactEmail) AS suppressed
+    FROM outreach_entries e
+    JOIN companies c ON c.id = e.companyId
+    WHERE e.channel = 'email' AND e.sentAt >= ${from} AND e.sentAt <= ${to}
+    GROUP BY c.id, c.legalName, c.contactEmail
+    ORDER BY bounced DESC, sent DESC
+  `)) as unknown as Array<{
+    companyId: string;
+    legalName: string;
+    contactEmail: string;
+    sent: number;
+    delivered: number;
+    opened: number;
+    bounced: number;
+    skipped: number;
+    suppressed: number;
+  }>;
+
+  const providers: ProviderEmailDeliveryRow[] = result.map((row) => {
+    const sent = Number(row.sent);
+    const bounced = Number(row.bounced);
+    return {
+      companyId: row.companyId,
+      legalName: row.legalName,
+      contactEmail: row.contactEmail,
+      sent,
+      delivered: Number(row.delivered),
+      opened: Number(row.opened),
+      bounced,
+      skipped: Number(row.skipped),
+      bounceRate: sent > 0 ? bounced / sent : null,
+      suppressed: Boolean(row.suppressed),
+    };
+  });
+
+  const totals = providers.reduce(
+    (acc, row) => ({
+      sent: acc.sent + row.sent,
+      delivered: acc.delivered + row.delivered,
+      opened: acc.opened + row.opened,
+      bounced: acc.bounced + row.bounced,
+      skipped: acc.skipped + row.skipped,
+    }),
+    { sent: 0, delivered: 0, opened: 0, bounced: 0, skipped: 0 },
+  );
+
+  return c.json({
+    providers,
+    totals: {
+      ...totals,
+      bounceRate: totals.sent > 0 ? totals.bounced / totals.sent : null,
+    },
   });
 });
 

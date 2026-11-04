@@ -203,9 +203,30 @@ describe("email lifecycle queue consumer", () => {
     ).toHaveLength(1);
   });
 
-  it("ignores unknown addresses, malformed bodies and irrelevant types without throwing", async () => {
+  it("skips unmatched recipients silently", async () => {
+    const provider = await createProvider(0);
+    const requestId = await createMatchedRequest();
+    await sendOutreachWithStub({
+      requestId,
+      providerIds: [provider.id],
+      staffUserId: await staffUserId(),
+      staffEmail: "staff@example.com",
+    });
+
     await handleEmailEventBatch(env, [
       { id: "u1", body: { type: "message.delivered", to: "nobody@example.com" } },
+    ]);
+    const entry = (
+      await db().select().from(outreachEntries).where(eq(outreachEntries.requestId, requestId))
+    )[0]!;
+    expect(entry.emailStatus).toBe("sent");
+    expect(
+      await db().select().from(auditEvents).where(eq(auditEvents.action, "email_delivered")),
+    ).toHaveLength(0);
+  });
+
+  it("ignores unknown addresses, malformed bodies and irrelevant types without throwing", async () => {
+    await handleEmailEventBatch(env, [
       { id: "u2", body: "this is not json{{{" },
       { id: "u3", body: 12345 },
       { id: "u4", body: { type: "something.else", to: "x@example.com" } },
@@ -217,6 +238,133 @@ describe("email lifecycle queue consumer", () => {
     ).toHaveLength(0);
     expect(
       await db().select().from(auditEvents).where(eq(auditEvents.action, "email_bounced")),
+    ).toHaveLength(0);
+  });
+
+  it("a late delivered event never downgrades an 'opened' entry", async () => {
+    const provider = await createProvider(0);
+    const requestId = await createMatchedRequest();
+    await sendOutreachWithStub({
+      requestId,
+      providerIds: [provider.id],
+      staffUserId: await staffUserId(),
+      staffEmail: "staff@example.com",
+    });
+    const entry = (
+      await db().select().from(outreachEntries).where(eq(outreachEntries.requestId, requestId))
+    )[0]!;
+    // The open pixel fired first: entry is 'opened'.
+    await db()
+      .update(outreachEntries)
+      .set({ emailStatus: "opened" })
+      .where(eq(outreachEntries.id, entry.id));
+
+    await handleEmailEventBatch(env, [
+      { id: "d1", body: { type: "message.delivered", to: provider.contactEmail } },
+    ]);
+
+    const after = (
+      await db().select().from(outreachEntries).where(eq(outreachEntries.id, entry.id))
+    )[0]!;
+    expect(after.emailStatus).toBe("opened");
+    expect(
+      await db().select().from(auditEvents).where(eq(auditEvents.action, "email_delivered")),
+    ).toHaveLength(0);
+  });
+
+  it("a bounce after 'delivered' flips to 'bounced' and suppresses", async () => {
+    const provider = await createProvider(0);
+    const requestId = await createMatchedRequest();
+    await sendOutreachWithStub({
+      requestId,
+      providerIds: [provider.id],
+      staffUserId: await staffUserId(),
+      staffEmail: "staff@example.com",
+    });
+    const entry = (
+      await db().select().from(outreachEntries).where(eq(outreachEntries.requestId, requestId))
+    )[0]!;
+    await db()
+      .update(outreachEntries)
+      .set({ emailStatus: "delivered" })
+      .where(eq(outreachEntries.id, entry.id));
+
+    await handleEmailEventBatch(env, [
+      { id: "b1", body: { type: "message.bounced", to: provider.contactEmail } },
+    ]);
+
+    const after = (
+      await db().select().from(outreachEntries).where(eq(outreachEntries.id, entry.id))
+    )[0]!;
+    expect(after.emailStatus).toBe("bounced");
+    expect(
+      await db().select().from(emailSuppressions).where(eq(emailSuppressions.email, provider.contactEmail)),
+    ).toHaveLength(1);
+    const events = await db()
+      .select()
+      .from(auditEvents)
+      .where(eq(auditEvents.action, "email_bounced"));
+    expect(events).toHaveLength(1);
+    expect(JSON.parse(events[0]!.payloadJson ?? "{}")).toMatchObject({ source: "queue" });
+  });
+
+  it("a bounce after 'opened' still flips to 'bounced'", async () => {
+    const provider = await createProvider(0);
+    const requestId = await createMatchedRequest();
+    await sendOutreachWithStub({
+      requestId,
+      providerIds: [provider.id],
+      staffUserId: await staffUserId(),
+      staffEmail: "staff@example.com",
+    });
+    const entry = (
+      await db().select().from(outreachEntries).where(eq(outreachEntries.requestId, requestId))
+    )[0]!;
+    await db()
+      .update(outreachEntries)
+      .set({ emailStatus: "opened" })
+      .where(eq(outreachEntries.id, entry.id));
+
+    await handleEmailEventBatch(env, [
+      { id: "b1", body: { type: "message.bounced", to: provider.contactEmail } },
+    ]);
+
+    const after = (
+      await db().select().from(outreachEntries).where(eq(outreachEntries.id, entry.id))
+    )[0]!;
+    expect(after.emailStatus).toBe("bounced");
+  });
+
+  it("never touches 'skipped' or terminal 'bounced' entries", async () => {
+    const provider = await createProvider(0);
+    const requestId = await createMatchedRequest();
+    await sendOutreachWithStub({
+      requestId,
+      providerIds: [provider.id],
+      staffUserId: await staffUserId(),
+      staffEmail: "staff@example.com",
+    });
+    const entry = (
+      await db().select().from(outreachEntries).where(eq(outreachEntries.requestId, requestId))
+    )[0]!;
+
+    for (const status of ["skipped", "bounced"]) {
+      await db()
+        .update(outreachEntries)
+        .set({ emailStatus: status })
+        .where(eq(outreachEntries.id, entry.id));
+      for (const type of ["message.delivered", "message.bounced", "message.opened"]) {
+        await handleEmailEventBatch(env, [
+          { id: `e-${status}-${type}`, body: { type, to: provider.contactEmail } },
+        ]);
+      }
+      const after = (
+        await db().select().from(outreachEntries).where(eq(outreachEntries.id, entry.id))
+      )[0]!;
+      expect(after.emailStatus).toBe(status);
+    }
+    expect(
+      await db().select().from(auditEvents).where(eq(auditEvents.action, "email_delivered")),
     ).toHaveLength(0);
   });
 });

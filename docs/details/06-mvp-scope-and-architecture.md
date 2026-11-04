@@ -49,7 +49,7 @@ Our advantage comes from the construction-specific workflow, capacity data, matc
 | App hosting | Cloudflare Workers (+ Static Assets) | Constraint; paid plan |
 | Database | Cloudflare D1 (SQLite), EU location | Constraint; relational integrity; Time Travel backups |
 | Authentication | Cloudflare Access (staff) now; email-token flows (providers) later | Staff-only cockpit maps to Access; no custom auth |
-| Email | Cloudflare Email Service | Transactional sending to arbitrary recipients after domain onboarding; delivery/bounce events via Queues; suppression lists built in. Open/click tracking self-hosted on Workers |
+| Email | Cloudflare Email Service | Transactional sending to arbitrary recipients after domain onboarding; delivery/bounce events via Queues; suppression lists built in. Open/click tracking self-hosted on Workers. **Note (SUBC-011):** Cloudflare currently exposes no lifecycle-event → Queue routing, so delivery/bounce signals arrive via a secret-gated webhook receiver, inbound RFC 3464 DSN parsing (Email Routing), and a resolution sweep — the Queue consumer stays wired for when routing ships |
 | AI text processing | Cloudflare Workers AI | Constraint; brief building is not latency-critical |
 | Document storage | Cloudflare R2, `eu` jurisdiction | Constraint; S3-compatible API |
 | Background work (later) | Cron Triggers, Queues, Workflows | Constraint; paid plan |
@@ -64,7 +64,7 @@ Booking system build-vs-adapt is an explicit partner decision (see [03-booking-a
 - **Database:** Cloudflare D1 (SQLite) with Drizzle ORM + drizzle-kit migrations.
 - **Authentication:** Cloudflare Access (Zero Trust) for staff; validated Access JWTs in middleware.
 - **AI:** Cloudflare Workers AI for brief building.
-- **Email:** Cloudflare Email Service — `send()` binding (SMTP and REST also available), lifecycle events (`message.delivered`, bounces) via Queues event subscriptions, suppression list; self-hosted open/click tracking pixel on Workers.
+- **Email:** Cloudflare Email Service — `send()` binding (SMTP and REST also available), lifecycle events (`message.delivered`, bounces) via Queues event subscriptions (once Cloudflare ships lifecycle-event → Queue routing — until then the SUBC-011 webhook/inbound-DSN/resolution-sweep workaround records them), suppression list; self-hosted open/click tracking pixel on Workers.
 - **Hosting/residency:** Cloudflare only; D1 EU location, R2 `eu` jurisdiction, EU worker placement.
 
 ## Core data entities

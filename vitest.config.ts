@@ -13,6 +13,7 @@ export default defineWorkersConfig({
             STAFF_ALLOWLIST: "staff@example.com,lead@example.com",
             EMAIL_TOKEN_SECRET:
               "f9c790f94f4775272624a1a95fb63096455bcceba53798801629eaa4d80f55f1",
+            EMAIL_EVENTS_WEBHOOK_SECRET: "test-webhook-secret",
             EMAIL_FROM: "Subcrew Test <outreach@test.example>",
             EMAIL_DAILY_LIMIT: "10",
             BOOKING_HOLDS_ENABLED: "true",

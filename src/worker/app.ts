@@ -31,6 +31,12 @@ export type Bindings = {
   EMAIL_REPLY_TO?: string;
   EMAIL_DAILY_LIMIT?: string;
   EMAIL_TOKEN_TTL_SECONDS?: string;
+  // SUBC-011: shared-secret auth for the POST /hooks/email-events receiver
+  // (unset ⇒ the endpoint fails closed) and the stale-sent resolution window
+  // in minutes (default 10 — with the 5-minute sweep this bounds settle time
+  // to ~15 minutes).
+  EMAIL_EVENTS_WEBHOOK_SECRET?: string;
+  EMAIL_RESOLVE_AFTER_MINUTES?: string;
   // Phase 2: 48-hour holds feature flag ("true" enables hold routes).
   BOOKING_HOLDS_ENABLED?: string;
   // Phase 3: hours a matching batch may sit silent before the cron widens it

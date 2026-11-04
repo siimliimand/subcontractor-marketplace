@@ -49,6 +49,29 @@ may be appended to `EVENT_ACTIONS` but never renamed (dashboards key on them).
 
 Rows 2, 5, 9, 11 and 13 re-verified live in the shipped code 2026-11-03; each write path is covered by the integration suite.
 
+### Email delivery lifecycle events (SUBC-011, 2026-11-03)
+
+`email_sent` / `email_delivered` / `email_bounced` / `email_opened` (entity
+`outreach_entry`) carry the full delivery state machine. Since Cloudflare Email Service
+has no lifecycle-event → Queue routing, lifecycle signals enter through **four
+producers**, all feeding one idempotent applier — the `source` field in each audit
+payload records which:
+
+| `source` | Producer | Latency |
+|---|---|---|
+| `queue` | Queue consumer `email()` (dormant until Cloudflare ships routing; kept wired) | push |
+| `webhook` | `POST /hooks/email-events` (bearer secret, fail-closed; manual ops / future provider routing) | push |
+| `inbound` | RFC 3464 DSN bounce parsed from Email Routing inbound mail (explicit failures only) | push |
+| `resolution` | 5-minute cron sweep settling stale `sent` entries (default window 10 min) | ≤ ~15 min |
+
+**Inferred-delivery marker:** `resolution`-sourced `email_delivered` events carry
+`payload.inferred: true` (+ `reason: "resolution_window_elapsed"`, `resolveAfterMinutes`)
+so timeout-settled deliveries stay distinguishable from provider-confirmed ones in
+dashboard queries. Transition rules: `bounced` wins over every earlier state (including
+inferred delivery) and suppresses the address; `skipped`/`bounced` are terminal; a late
+`delivered` never downgrades `opened`. The pixel (`email_opened`) upgrades the entry
+status to `opened` from `sent`/`delivered` only.
+
 Supporting events (not funnel steps, needed for denominators/ops): `request_updated`,
 `request_cancelled` (payload: cancelledBy + reason — feeds the customer-cancelled
 exclusion in metrics), `provider_created`, `provider_updated`, `login`, `access_denied`,

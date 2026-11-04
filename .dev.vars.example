@@ -25,3 +25,13 @@ EMAIL_FROM=Subcrew <outreach@notify.example.com>
 
 # Optional email token time-to-live in seconds (default 604800 = 7 days)
 #EMAIL_TOKEN_TTL_SECONDS=604800
+
+# SUBC-011: shared secret for the POST /hooks/email-events delivery-event receiver
+# (generate with `openssl rand -hex 32`). Unset ⇒ the endpoint fails closed (401),
+# never open.
+EMAIL_EVENTS_WEBHOOK_SECRET=generate-with-openssl-rand-hex-32
+
+# SUBC-011: minutes an email-channel outreach entry may stay 'sent' with no
+# lifecycle signal before the 5-minute cron sweep resolves it to an explicitly
+# marked inferred delivery (default 10 → settle time bounded to ~15 minutes).
+#EMAIL_RESOLVE_AFTER_MINUTES=10

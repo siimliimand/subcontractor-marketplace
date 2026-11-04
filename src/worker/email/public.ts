@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { drizzle } from "drizzle-orm/d1";
 import type { BatchItem } from "drizzle-orm/batch";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import type { Bindings } from "../app";
 import { companies, emailTokens, outreachEntries, requests, availabilityDeclarations, auditEvents } from "../db/schema";
 import type { EmailTokenPurpose } from "../db/schema";
@@ -400,11 +400,24 @@ export function createPublicApp() {
     )[0];
     if (!entry) return gif();
 
+    // SUBC-011: the open pixel also upgrades the entry's delivery status to
+    // 'opened' — guarded to current status ('sent' | 'delivered') so an
+    // already-'bounced'/'skipped' entry keeps its terminal red status (the
+    // open itself is still a fact and is audited either way).
     await db.batch([
       db
         .update(emailTokens)
         .set({ usedAt: new Date().toISOString() })
         .where(and(eq(emailTokens.jti, verified.jti), isNull(emailTokens.usedAt))),
+      db
+        .update(outreachEntries)
+        .set({ emailStatus: "opened" })
+        .where(
+          and(
+            eq(outreachEntries.id, entry.id),
+            inArray(outreachEntries.emailStatus, ["sent", "delivered"]),
+          ),
+        ),
       auditEventStatement(db, {
         actorUserId: null,
         actorEmail: null,
