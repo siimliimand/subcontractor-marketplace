@@ -184,13 +184,24 @@ above; see also the decision-log entries “CI gate decision — 3 November
   remains the manual backfill (`gh workflow run ci.yml --ref main`). Runs are
   per-ref concurrent (a newer push to the same ref cancels the stale run);
   cancelled runs never alert.
-- **PR merges into `main` are gated.** Ruleset `ci-merge-gate-pilot` (id
-  26516182) requires the `test` check (non-strict) plus `non_fast_forward`
-  and `deletion`, for `refs/heads/main` only. **Direct pushes to main are
-  NOT blocked** — the landing flow (engine merge + `push-main-when-ahead`)
-  keeps working; only PR merges wait for a green `test`. Do not add a
-  `pull_request` rule or strict required checks while the direct-push
-  landing model is in use. Re-evaluate at pilot end.
+- **Merge gate: currently DISABLED — parked since 2026-11-04 pending
+  PR-based landing support in Fusion (engine fix plan FIX-6). While
+  disabled, nothing is enforced: neither PR merges nor direct pushes into
+  `main` are gated.** Intended design (dormant until re-activation):
+  ruleset `ci-merge-gate-pilot` (id 26516182) requires the `test` check
+  (non-strict) plus `non_fast_forward` and `deletion`, for
+  `refs/heads/main` only — while enforcement is `active`, PR merges into
+  `main` are gated on a green `test`. Live 2026-11-04 finding: active
+  required-status rulesets also gate DIRECT pushes ("push declined due to
+  repository rule violations", independent of `strict=false`), which broke
+  the landing flow (engine merge + `push-main-when-ahead`) — direct pushes
+  to `main` are NOT blocked today only because enforcement is `disabled`
+  (SUBC-013 addendum; ruleset kept, not deleted). Re-activation procedure
+  when FIX-6 ships: PUT the GET snapshot with only `enforcement` changed
+  to `active`, re-run the probe procedure below plus a green-merge
+  control, and auto-revert to `disabled` on any landing breakage. Do not
+  add a `pull_request` rule or strict required checks while the
+  direct-push landing model is in use. Re-evaluate at pilot end.
 - **A `ci-failure` issue means CI failed somewhere.** The `notify` job
   (`if: failure()`, `GITHUB_TOKEN` only, no secrets) creates it on the first
   failure and comments on it for subsequent failures (one open issue at a
@@ -231,8 +242,11 @@ above; see also the decision-log entries “CI gate decision — 3 November
      run becomes the newest completed run — that is expected and self-heals.
 - **SUBC-008 interplay:** the watchdog and the merge gate are complementary —
   the watchdog guarantees landings reach origin and go green (pushes are
-  direct, hence unaffected by the ruleset); the ruleset guarantees PR merges
-  cannot bypass a red check. If the watchdog has pushed main, a redundant
-  push is a harmless no-op; never force-push to win a race, and never let
-  local main fall behind origin (that trips the drift alert and blocks all
-  landings).
+  direct, hence unaffected by the ruleset *only while enforcement is
+  disabled* — the 2026-11-04 finding is that an active required-status
+  ruleset declines direct pushes too, which is exactly why the gate is
+  parked); the ruleset's guarantee that PR merges cannot bypass a red
+  check likewise holds only while enforcement is active. If the watchdog
+  has pushed main, a redundant push is a harmless no-op; never force-push
+  to win a race, and never let local main fall behind origin (that trips
+  the drift alert and blocks all landings).

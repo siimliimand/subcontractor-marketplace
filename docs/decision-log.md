@@ -92,3 +92,44 @@ branch apply to direct pushes as well, independent of `strict=false`. Enforcemen
 `evaluate` dry-run tier is unavailable on this plan. Re-activation is conditional on Fusion
 supporting PR-based landing (fix plan FIX-6). Probe artifacts (`ci-gate-probe/20261104`, PR #1)
 remain as pilot evidence.
+
+## Merge-gate re-enable evaluation — 2026-11-04 (SUBC-014)
+
+**Decision: NO-GO — ruleset 26516182 stays enforcement `disabled` (parked); re-activation
+remains conditional on FIX-6, exactly as the SUBC-013 addendum above records.** This entry
+evaluates that re-activation condition from live evidence and corrects the stale SUBC-013
+wording in `agents.md` that described the disabled ruleset as if it were active.
+
+Evaluation evidence (2026-11-04, live):
+
+- Ruleset GET, twice (Step 0 snapshot and the Step 1 verified hold):
+  `enforcement: "disabled"`, name `ci-merge-gate-pilot`, target `branch`, conditions
+  `refs/heads/main` only, rules `required_status_checks` (context `test`, integration 15368,
+  strict policy false) + `non_fast_forward` + `deletion`, no bypass actors — byte-identical
+  between both GETs. No mutation was made at any point in SUBC-014 (verified hold, not a flip).
+- Landing mode: the two most recent landings — `b874fd0` (SUBC-010, 2026-11-04T08:59:16Z) and
+  `5637fba` (SUBC-013, 2026-11-04T09:20:58Z) — arrived as DIRECT pushes after the disable
+  flip; `git log --merges` on `origin/main` is empty.
+- The only PR-merged landing, PR #3 (SUBC-011, squash-merged 2026-11-04T08:09:56Z → `0645df5`),
+  was authored AND merged manually by siimliimand from `fusion/subc-011` (branch still on
+  origin as the rescue leftover), body: "Created via the ci-merge-gate-pilot ruleset path
+  because direct main pushes now require the test check." That is a manual rescue of a
+  declined engine direct-push — not engine-side PR-based landing. FIX-6 is therefore NOT
+  live: landings still depend on direct pushes, and activating the ruleset now would
+  re-decline SUBC-014's own landing (the exact 2026-11-04 failure mode).
+- Probe re-verification (GO-path only) skipped with this rationale; no probe branch/PR/issue
+  was created; legacy pilot artifacts (`ci-gate-probe/20261104`, PR #1) untouched.
+
+Docs corrections (the reported defect, fixed under NO-GO): `agents.md` § "CI merge gate and
+failure alerts" gate bullet now leads with the disabled/parked state (nothing is gated while
+disabled), labels PR gating as intended design, records the direct-push finding, and carries
+the FIX-6 re-activation procedure (snapshot-preserved PUT changing only `enforcement`, probe
+re-run plus green-merge control, auto-revert on breakage); the SUBC-008 interplay bullet now
+qualifies "pushes are direct, hence unaffected by the ruleset" as true only while enforcement
+is disabled. `README.md` § CI verified unchanged — it already carried "currently **disabled**
+— parked pending PR-based landing support in Fusion".
+
+Watchdog disposition (NO-GO): unchanged — the 10-min cron's direct-push path stays safe
+precisely because enforcement stays disabled; no cron-line change is needed. Currency at
+evaluation: `verify-ci-currency` exit 0 (local main == origin/main `5637fba` == green run
+#20, id 41806748303).
