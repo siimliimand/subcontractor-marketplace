@@ -1,10 +1,12 @@
 # Subcontractor Marketplace
 
 Internal concierge cockpit and future marketplace codebase for the Estonian construction
-subcontractor pilot. The cockpit (this repo's first app) is the staff tool for running
-the pilot: provider administration, request lifecycle, outreach logging, manual-effort
-tracking and a funnel dashboard. Runs entirely on Cloudflare (Workers + D1 + Access +
-Static Assets).
+subcontractor pilot (interior fit-out in Tallinn / Harju county). The cockpit (this
+repo's first app) is the staff tool for running the pilot: provider administration,
+request lifecycle, outreach and the full email pipeline, matching, bookings and holds,
+manual-effort tracking, reliability scores, monetization records and funnel dashboards.
+Runs entirely on Cloudflare (Workers + D1 + Access + Email Service + Queues + Workers
+AI + Static Assets).
 
 ## Stack
 
@@ -13,19 +15,53 @@ Static Assets).
 - **Database:** Cloudflare D1 (SQLite) with Drizzle ORM and versioned SQL migrations
 - **Auth:** Cloudflare Access — the Worker validates the `Cf-Access-Jwt-Assertion` JWT
   (signature via the team JWKS, issuer + audience), auto-provisions allowlisted staff and
-  denies everyone else with 403
+  denies everyone else with 403. Provider-side accounts use a separate public portal
+  (`/u/*`) with session cookies (`PROVIDER_SESSION_SECRET`).
+- **Email:** Cloudflare Email Service (`SEND_EMAIL` binding) for one-click outreach,
+  a (currently dormant) Queues consumer for lifecycle events, and inbound Email Routing
+  that parses RFC 3464 bounce DSNs
+- **AI:** Workers AI binding for the brief builder; the planner is flag-gated off
 - **Events:** every mutation writes an immutable audit/funnel event in the same D1 batch;
   action names come from a fixed enum, `channel` defaults to `manual`
+- **Cron:** a single `*/5 * * * *` trigger — each tick runs the email resolution sweep;
+  hourly jobs (outreach widening, retention purge, calendar fetch) gate on minute 0
+
+## Features by phase
+
+- **Phase 1 — cockpit core:** providers (services, trades, regions), request lifecycle,
+  outreach logging, manual-effort tracking, funnel dashboard
+- **Email pipeline:** one-click Accept / Quote / Decline links (single-use expiring
+  tokens, no login), delivery lifecycle (sent → delivered/bounced → opened), hard-bounce
+  auto-suppression, secret-gated lifecycle webhook, stale-`sent` resolution sweep
+- **Phase 2 — matching & booking:** multi-trade availability windows, weighted matching
+  engine (runtime-adjustable weights), 48-hour exclusive holds (`BOOKING_HOLDS_ENABLED`),
+  booking request/confirm/cancel with reschedule proposals, AI brief builder
+- **Phase 3 — pilot & monetization:** hand-billed pilot agreements
+  (`MONETIZATION_PILOT_ENABLED` gates booking POSTs), register imports from
+  Äriregister (companies) and MTR (trade notifications) with drift guards
+- **Phase 4 — expansion:** secret Google/Outlook ICS calendar feeds with conflict
+  rejection, trade/region catalog, reviews + reliability scores (neutral below minimum
+  samples), provider accounts and the public `/u/*` portal, AI planner
+  (`PLANNER_AI_ENABLED`, off), governed audit CSV export
 
 ## Repository layout
 
 ```
-src/worker/       API (Hono app, auth, event helper, routes, Drizzle schema)
-src/ui/           React SPA (providers, requests, dashboard)
+src/worker/       API (Hono app, auth, events, 16 route modules)
+  routes/         providers, requests, matching, bookings/holds, briefs, email
+                  outreach, effort, dashboard, suppression, catalog, calendar,
+                  reviews, pilot, planner, audit export, provider portal
+  email/          composer, sender, tokens, lifecycle events, inbound, webhook
+  matching/       weights + engine   calendar/  ICS fetch + busy intervals
+  cron/           widening, retention, calendar   ai/  brief builder
+src/ui/           React SPA (dashboard, providers, requests, suppressions)
 migrations/       Generated SQL migrations (drizzle-kit)
-test/             Integration tests (vitest + @cloudflare/vitest-pool-workers, local D1)
-docs/             Planning docs
+test/             Integration tests (vitest + @cloudflare/vitest-pool-workers, real D1)
+docs/             plan.md, implementation-plan.md, decision-log.md, details/, phase0/
 openspec/         Change specifications
+scripts/          Register import CLIs + CI currency/push tooling (see below)
+ops/              Operator SQL (staging reset)
+.github/          CI workflow
 ```
 
 ## Local development
@@ -37,15 +73,30 @@ npm run db:migrate:local              # apply migrations to the local D1
 npm run dev                           # wrangler dev (API :8787) + vite (UI :5173, proxies /api)
 ```
 
+Lint before landing: `npm run lint` (zero errors is the bar) — CI runs
+lint → build → typecheck → test.
+
 ## Tests
 
 ```bash
 npm test
 ```
 
-320 integration tests run against real D1 in miniflare (auth, providers, requests,
-outreach, effort, dashboard, email pipeline, full email journey, register
-imports). Count verified 2026-11-04.
+395 integration tests (43 files) run against real D1 in miniflare (auth, providers,
+requests, matching, holds/bookings, briefs, outreach, full email journey, delivery
+lifecycle, suppression, calendar sync, catalog, reviews/reliability, monetization,
+planner, provider accounts, register imports, dashboard, audit governance and the
+CI-currency tooling itself). Count verified 2026-11-05 (latest green CI run on main).
+
+## Feature flags (wrangler `vars`, default off unless noted)
+
+| Flag | Effect |
+|---|---|
+| `BOOKING_HOLDS_ENABLED` | enables 48-hour exclusive hold routes |
+| `MONETIZATION_PILOT_ENABLED` | booking POSTs require an active pilot agreement |
+| `PLANNER_AI_ENABLED` | AI plan generation (off until real project data exists) |
+| `CALENDAR_FETCH_ENABLED` | hourly ICS fetch (on; feeds exist once staff register them) |
+| `MTR_BADGES_ENABLED` | MTR/Tarvik badge display (off until licence confirmation; import is always safe) |
 
 ## Schema changes
 
@@ -54,6 +105,9 @@ npm run db:generate                   # drizzle-kit generate -> migrations/*.sql
 npm run db:migrate:staging
 npm run db:migrate:production
 ```
+
+Every new `migrations/*.sql` must also be registered in `test/apply-migrations.ts`
+(the test pool applies them manually; a missing entry fails every test).
 
 ## Deploy
 
@@ -78,12 +132,34 @@ is empty.
 
 ## CI
 
-`.github/workflows/ci.yml` runs lint, build, typecheck and the 320 integration tests
-on **every push (any branch)** and on pull requests; failed runs open a `ci-failure`
-issue as an alert, and a `ci-merge-gate-pilot` ruleset gates PR merges into `main`
-on the `test` check (currently **disabled** — parked pending PR-based landing
-support in Fusion). Requires the repo to be pushed to GitHub
-with Actions enabled.
+`.github/workflows/ci.yml` runs lint, build, typecheck and the full integration test
+suite on **every push (any branch)** and on pull requests; failed runs open a
+`ci-failure` issue as an alert (close it with a comment, never delete it), and a
+`ci-merge-gate-pilot` ruleset gates PR merges into `main` on the `test` check
+(currently **disabled** — parked pending PR-based landing support in Fusion).
+
+**Push transport (single-writer contract).** `scripts/push-main-when-ahead.mjs` is the
+only component that ever pushes `main` (never force, never task branches). After a
+landing on `main`: run the script (exit 0 = pushed + green Actions run on the tip),
+then `node scripts/verify-landing-gate.mjs`. A scheduled cron re-flush is documented in
+`docs/operator-ci-currency-cron.md`. Drift (alert file or non-zero
+`verify-ci-currency.mjs`) blocks further merges until currency is restored. See
+`agents.md` for the full contract.
+
+## Register imports (only path register data may take into D1)
+
+```bash
+node scripts/import-ariregister.mjs <csv>   # Äriregister open data → companies
+node scripts/import-mtr.mjs <xml> --dry-run # read-only BEFORE counts (SELECTs only)
+node scripts/import-mtr.mjs <xml>           # emit SQL; review the `-- summary:` line
+```
+
+Always dry-run / emit to scratch first and sanity-check counts before applying with
+`wrangler d1 execute … --file`. A drifted export (zero upserts) prints a GUARD
+diagnostic and exits 1 — it can never flip every MTR trade-notification row to
+`invalid` in one pass; `--force-expire` is an explicit operator override. Keep
+downloads and emitted SQL in a `*.local/` directory (gitignored). Badge display stays
+behind `MTR_BADGES_ENABLED` until the TTJA licence confirmation is recorded.
 
 ## Secrets (never committed)
 
@@ -95,157 +171,96 @@ Set per environment with `wrangler secret put <NAME> -e staging|production`:
 | `ACCESS_AUD` | Access application AUD tag |
 | `STAFF_ALLOWLIST` | comma-separated staff emails (defence in depth on top of the Access policy) |
 | `EMAIL_TOKEN_SECRET` | HMAC secret for one-click email response tokens (`openssl rand -hex 32`) |
+| `EMAIL_EVENTS_WEBHOOK_SECRET` | bearer secret for `POST /hooks/email-events` (unset ⇒ fail-closed 401) |
+| `PROVIDER_SESSION_SECRET` | session cookie signing for the public `/u/*` provider portal |
 
 Local equivalents go in `.dev.vars` (gitignored); see `.dev.vars.example`.
 
 ## Cloudflare setup checklist (dashboard, one-off per environment)
 
 1. **D1** — `cockpit-staging` / `cockpit-production` exist (EU region), migrations applied.
-2. **Zero Trust → Access → Applications** — add a *Self-hosted* application for the
-   Worker domain (`concierge-cockpit-staging.<account>.workers.dev`, then production),
-   policy: Allow → Emails = the team list. Copy the application's **AUD tag** into the
-   `ACCESS_AUD` secret.
-3. **Secrets** — put `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`, `STAFF_ALLOWLIST` per environment.
-4. **Verify** — open the Worker URL, complete the Access login round-trip, confirm a
-   `login` audit event appears.
+2. **Zero Trust → Access → Applications** — a *Self-hosted* application for the Worker
+   domain (policy: Allow → Emails = the team list; AUD tag → `ACCESS_AUD`), plus
+   **Access bypasses** for the public paths: `/e/`, `/t/` (email tokens, tracking
+   pixel), `/u/*` (provider portal) and `/hooks/` (webhook uses its own bearer secret).
+3. **Email sending** — sending subdomain `subcontractor.ww0.dev` is verified (2026-10-18);
+   `EMAIL_FROM` in `wrangler.jsonc` points at it. Account sending quota is
+   1000 emails/day; `EMAIL_DAILY_LIMIT` (default 50) stays below it for warm-up.
+4. **Inbound bounce routing** — on the sending-subdomain zone, enable Email Routing and
+   deliver the sending addresses to this Worker; bounce DSNs then reach the `email()`
+   handler automatically.
+5. **Queues** (dormant consumer kept for the future) —
+   `npx wrangler queues create email-events-staging` (and `-production`).
+6. **Secrets** — put the table above per environment.
+7. **Verify** — open the Worker URL, complete the Access login round-trip, confirm a
+   `login` audit event appears; send to a known-bad address and confirm the bounce +
+   suppression row appear within minutes.
 
-## Email pipeline
+## Email pipeline details
 
-One-click Accept / Quote / Decline links in outreach emails (no login, single-use
-expiring tokens) plus delivery lifecycle tracking: sent → delivered/bounced → opened,
-with hard-bounced addresses auto-suppressed. Sending uses the Cloudflare Email Service
-`SEND_EMAIL` binding.
+Three producers feed one shared, idempotent, transition-guarded applier
+(`src/worker/email/events.ts`):
 
-**Delivery lifecycle ingestion (SUBC-011, 2026-11-03) — three paths, one state
-machine.** Cloudflare's dashboard offers no lifecycle-event → Queue routing for the
-Email Service (checked 2026-10-18: domain settings, Connect tab, account settings), so
-the original Queue consumer sat dormant and every email stayed `sent` forever. The
-workaround keeps everything inside Cloudflare and feeds one shared, idempotent,
-transition-guarded applier (`src/worker/email/events.ts`) from three producers:
-
-1. **Queue consumer (kept, dormant)** — `queue()` on the Worker still consumes
-   `email-events-staging` / `email-events-production`. The moment Cloudflare ships
-   lifecycle-event → Queue routing, it starts producing with zero code changes.
-2. **Secret-gated webhook receiver** — `POST /hooks/email-events` (public route, no
-   Access; bearer-secret auth, constant-time compare, fail-closed 401 when the secret
-   is unset). This is the path usable *today*: manual ops during concierge processing,
-   a provider reports an outcome, or any future provider-side routing. Accepts a single
-   event or an array; event shape `{"type": "message.delivered|message.bounced",
-   "to": "<contact email>", "sendId": "…", "permanent": true}` — type substrings
-   `delivered`/`bounced`/`opened` are mapped tolerantly.
-3. **Inbound bounce Email Worker** — Cloudflare Email Routing delivers DSN bounces
-   sent back to our sending subdomain addresses to the Worker's `email()` handler,
-   which parses RFC 3464 delivery-status notifications (`Final-Recipient`, `Status
-   4.x/5.x`, `X-Failed-Recipients` fallback). Explicit failures only — vacation
-   auto-replies and human replies are never classified as bounces.
-
-**Resolution sweep (no signal at all).** A scheduled sweep
-(`resolveStaleSentEmails`, run from the 5-minute cron — see below) settles any
-e-mail-channel entry still `sent` after `EMAIL_RESOLVE_AFTER_MINUTES` (default 10) to
-`delivered` **marked as inferred**: the `email_delivered` audit payload carries
-`{inferred: true, reason: "resolution_window_elapsed", source: "resolution"}` so
-timeout-settled deliveries stay honestly distinguishable from provider-confirmed ones
-in every dashboard query. A real bounce arriving later still wins (bounce beats any
-earlier state, including inferred delivery, and suppresses the address). With the
-default 10-minute window + 5-minute sweep, no pilot message stays `sent` longer than
-~15 minutes; the first sweep run after deploy retroactively resolves historical stuck
-`sent` entries.
-
-**Per-provider delivery metrics.** `GET /api/dashboard/email-delivery` (Access-guarded)
-returns per-provider sent / delivered / opened / bounced / skipped counts, a computed
-`bounceRate` (bounced ÷ dispatched; skipped never counts in the denominator), and the
-suppression flag — rendered as the per-provider table in the dashboard's *Email
-pipeline* section for the Gate 2 evidence pack.
-
-Setup, in order:
-
-1. **Verify a sending subdomain (DONE 2026-10-18).** Sending subdomain
-   `subcontractor.ww0.dev` is verified and enabled in the Cloudflare dashboard (DNS
-   records created, Email Sending on). `EMAIL_FROM` in `wrangler.jsonc` is configured
-   accordingly: `Subcrew Staging <info@subcontractor.ww0.dev>` /
-   `Subcrew <info@subcontractor.ww0.dev>`. Note the account-level
-   sending quota is **1000 emails/day**; `EMAIL_DAILY_LIMIT` warm-up cap stays below it.
-
-2. **Create the queues** (the dormant consumer stays wired for the future):
-
-   ```bash
-   npx wrangler queues create email-events-staging
-   npx wrangler queues create email-events-production
-   ```
-
-3. **Secrets** — per environment:
-
-   ```bash
-   openssl rand -hex 32
-   npx wrangler secret put EMAIL_TOKEN_SECRET -e staging
-   npx wrangler secret put EMAIL_TOKEN_SECRET -e production
-   # SUBC-011: webhook receiver secret (unset ⇒ the endpoint fails closed)
-   openssl rand -hex 32
-   npx wrangler secret put EMAIL_EVENTS_WEBHOOK_SECRET -e staging
-   npx wrangler secret put EMAIL_EVENTS_WEBHOOK_SECRET -e production
-   ```
-
-   Webhook curl recipe (manual ops path — an unknown recipient is skipped, never an
-   error):
+1. **Queue consumer (kept, dormant)** — the moment Cloudflare ships lifecycle-event →
+   Queue routing, it starts producing with zero code changes.
+2. **Secret-gated webhook** — `POST /hooks/email-events` accepts a single event or an
+   array, e.g. `{"type":"message.delivered","to":"provider@example.ee","sendId":"…"}`
+   (types mapped tolerantly via `delivered`/`bounced`/`opened` substrings). Manual ops
+   recipe:
 
    ```bash
    curl -X POST https://<worker-host>/hooks/email-events \
      -H "Authorization: Bearer $EMAIL_EVENTS_WEBHOOK_SECRET" \
      -H "Content-Type: application/json" \
      -d '{"type":"message.delivered","to":"provider@example.ee"}'
-   # → {"accepted":1,"skipped":0}   (or {"accepted":0,"skipped":1} for unknown)
+   # → {"accepted":1,"skipped":0}   (unknown recipient is skipped, never an error)
    ```
 
-4. **Inbound bounce routing (one-off dashboard setup, post-deploy operator step).**
-   On the `subcontractor.ww0.dev` zone in the Cloudflare dashboard: enable **Email
-   Routing**, then add a route delivering the envelope addresses of the sending
-   subdomain (e.g. `info@subcontractor.ww0.dev`, or a catch-all on the subdomain) to
-   this Worker (Send to → Worker → `concierge-cockpit-staging` / `…-production`).
-   Bounce DSNs returned by recipient mail servers then flow into the `email()` handler
-   automatically. Verification is a live post-deploy check: send to a known-bad
-   address, confirm the entry flips to `bounced` and the suppression row appears within
-   minutes.
+3. **Inbound bounce Email Worker** — the `email()` handler parses RFC 3464 DSNs
+   (`Final-Recipient`, `Status 4.x/5.x`, `X-Failed-Recipients` fallback). Explicit
+   failures only — vacation auto-replies and human replies are never bounces.
 
-5. **Resolution window** — `EMAIL_RESOLVE_AFTER_MINUTES` (default 10) is set in the
-   `vars` of both `staging` and `production` in `wrangler.jsonc`; adjust per
-   environment if provider DSN latency makes inferred deliveries too eager (DSN bounces
-   usually arrive within minutes; the window only needs to exceed typical bounce
-   latency).
+**Resolution sweep (no signal at all).** The 5-minute cron settles any email-channel
+entry still `sent` after `EMAIL_RESOLVE_AFTER_MINUTES` (default 10) to `delivered`
+marked as inferred (`{inferred: true, reason: "resolution_window_elapsed"}` in the
+audit payload) — a real bounce arriving later still wins and suppresses the address.
+With defaults, no message stays `sent` longer than ~15 minutes.
 
-6. **Deploy + migrate:**
+**Per-provider metrics.** `GET /api/dashboard/email-delivery` returns per-provider
+sent / delivered / opened / bounced / skipped, `bounceRate` (skipped never counts in
+the denominator) and the suppression flag — rendered in the dashboard's *Email
+pipeline* section.
 
-   ```bash
-   npm run db:migrate:staging
-   npm run deploy:staging
-   npm run db:migrate:production
-   npm run deploy:production
-   ```
+## Endpoints (staff API requires a valid Access JWT; `GET /api/health` is public)
 
-7. **Warm-up.** `EMAIL_DAILY_LIMIT` (default 50) hard-caps sends per UTC day; start low
-   and raise gradually to protect the new subdomain's reputation. Hard bounces
-   auto-suppress the address — suppressed providers are skipped at batch-send time.
+Public non-Access routes: token links (`GET/POST /e/:token`), tracking pixel
+(`GET /t/:file`), the provider portal (`/u/*` JSON API: token accept/login/logout,
+`/u/me`, `/u/company`, owner user management) and the webhook
+(`POST /hooks/email-events`).
 
-**Cron cadence (SUBC-011):** the Worker's cron trigger fires **every 5 minutes**
-(`*/5 * * * *`). Each tick runs the email resolution sweep; the pre-existing hourly
-jobs (outreach widening, retention purge, calendar fetch) gate on minute 0 inside
-`runScheduledJobs`, so their cadence is unchanged.
-
-Local development equivalents go in `.dev.vars` (gitignored); see `.dev.vars.example`
-(`EMAIL_TOKEN_SECRET`, `EMAIL_FROM`, optional `EMAIL_REPLY_TO`, `EMAIL_DAILY_LIMIT`,
-`EMAIL_TOKEN_TTL_SECONDS`, and the SUBC-011 additions `EMAIL_EVENTS_WEBHOOK_SECRET`,
-`EMAIL_RESOLVE_AFTER_MINUTES`).
-
-## Endpoints (all require a valid Access JWT; `GET /api/health` is public)
-
-Public non-Access routes: the token links (`GET/POST /e/:token`), the tracking pixel
-(`GET /t/:file`), the provider portal (`/u/*`), and the secret-authenticated email-event
-webhook (`POST /hooks/email-events` — bearer secret, no Access JWT).
-
-- `POST /api/providers`, `GET /api/providers`, `GET /api/providers/:id`, `PATCH /api/providers/:id`
-- `POST /api/providers/:id/services`, `PATCH /api/providers/:id/services/:serviceId`
-- `POST /api/requests`, `GET /api/requests`, `GET /api/requests/:id`, `PATCH /api/requests/:id`
-- `POST /api/requests/:id/transition | /responses | /bookings | /outcome | /cancel`
-- `GET /api/requests/:id/history`, `GET /api/requests/:id/effort`
-- `POST /api/requests/:id/outreach`, `GET /api/requests/:id/outreach`
-- `POST /api/requests/:id/time`
-- `GET /api/dashboard/overview | /supply | /effort | /email-delivery`
+- **Providers** — `POST/GET /api/providers`, `GET/PATCH /api/providers/:id`,
+  `POST /api/providers/:id/services`, `PATCH /api/providers/:id/services/:serviceId`,
+  `PUT /api/providers/:id/regions`, `GET/POST /api/providers/:id/availability`
+  (+ `/reconfirm`), `GET /api/providers/:id/verifications`, `GET/POST
+  /api/providers/:id/users` (+ `/disable`), `POST /api/providers/:id/erase` (GDPR),
+  `GET/POST/DELETE /api/providers/:id/calendar(/:feedId)`
+- **Requests** — `POST/GET /api/requests`, `GET/PATCH /api/requests/:id`,
+  `POST …/transition | /responses | /bookings | /outcome | /cancel`,
+  `GET …/history`, `GET/POST …/effort` · `POST …/time`, `GET/POST …/outreach`
+- **Matching & booking** — `POST /api/requests/:id/match`, `GET/PUT
+  /api/matching/weights`, `GET/POST /api/requests/:id/holds`,
+  `POST /api/holds/:id/release`, `POST …/bookings/request | /confirm | /cancel |
+  /reschedule` (+ proposal `confirm`/`reject`), `POST …/work-start`
+- **Briefs & planner** — `POST /api/briefs/draft`, `GET /api/briefs/:id`,
+  `POST /api/briefs/:id/approve`, `POST /api/requests/:id/plan`,
+  `GET /api/requests/:id/plans`, `POST /api/plans/:id/feedback`
+- **Email** — `POST /api/requests/:id/outreach/email`, `GET/POST/DELETE
+  /api/suppressions(/:email)`
+- **Catalog & pilot** — `GET /api/catalog`, `POST /api/catalog/trades(/:slug/deactivate) |
+  /catalog/regions`, `GET/POST /api/partners`, `GET/POST /api/pilot/agreements`
+  (+ `/:id/end`), `GET /api/pilot/metrics`, `POST /api/requests/:id/partner`
+- **Reviews** — `GET /api/providers/:id/reviews`, `POST /api/bookings/:bookingId/review`
+  (+ `/dispute`, `/restore`)
+- **Dashboard** — `GET /api/dashboard/overview | /supply | /effort | /weekly |
+  /email-delivery | /export.csv`
+- **Governance** — `GET /api/audit/export` (governed audit CSV)
