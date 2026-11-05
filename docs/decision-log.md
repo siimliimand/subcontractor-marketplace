@@ -915,3 +915,50 @@ classifications are unaffected whether or not it is applied.
 
 Owner: founder (operator applies the runbook and records the AFTER counts; agent sessions own the re-entry evaluation).
 
+## Closed-task branch retirement shipped engine-side with automatic rescue pin — 2026-11-05 (SUBC-037)
+
+**Decision: the closed-work orphan-branch class is retired at the engine level.** A deterministic retire-after-archive hook — implemented against Runfusion/Fusion main `eb7eef4` (clone `scratch.local/fusion`, branch `subc-037/retire-after-archive`, three commits) — routes every terminal archive/delete path's Fusion-owned local branches through one rescue-pin contract: landed tips (ancestry OR bounded tree-equality, the squash-merge shape) are deleted outright, unlanded tips gain a lightweight `rescue/<branch-with-/--as-->` pin verified at the exact tip sha BEFORE the branch ref disappears, operator-owned and worktree-held branches are kept, and every outcome is audited on the task log. Upstream delivery is path B — patch-bundle handoff: the Step 0 probe recorded `gh repo view Runfusion/Fusion --json viewerPermission` → `READ`, so no fork, push, or PR was created autonomously and the operator owns opening the upstream PR. This repo receives only this entry; agents.md is deliberately untouched (the branch-hygiene policy promotion is SUBC-039's deliverable).
+
+### The gap this closes
+
+- The SUBC-019 audit's manual disposition (this file :453-454, disposition table :501) — rescue-pin `rescue/fusion-subc-006` → `048acdc`, then `branch -d` refused ("not fully merged") and `branch -D` deleted `fusion/subc-006` — is exactly the operation the engine now performs automatically, with the same pin grammar (lightweight tags, `objecttype commit`, name = `rescue/` + branch with every `/` → `-`; operator pins `rescue/fusion-subc-006` and `rescue/fusion-subc-011` re-verified live at planning).
+- Live recurrence at planning: `fusion/subc-030` existed locally at `8200629` while SUBC-030 was done — an UNLANDED orphan (tip not an ancestor of main; tip tree `d22792a` ≠ main tree) with no worktree hold: precisely the shape the automatic rescue pin preserves. Done tasks subc-019/021/027/031/032/034/035 left no branches — the mixed behavior the diagnosis below explains.
+
+### Diagnosed lingering mechanisms (code-verified at `eb7eef4`, clone file:line)
+
+| # | Mechanism | Anchor |
+|---|---|---|
+| 1 | Silent skips in `cleanupBranchForTaskImpl`: unsafe name → continue; `isFusionDeletableBranch` false → continue; `rev-parse --verify` exit≠0 → continue; `branch -D` exit≠0 (e.g. branch checked out in a live worktree) → silently not deleted | packages/core/src/task-store/task-mutation-ops.ts:1453-1488 |
+| 2 | Archive live-refusal suppression: a disposer refusal skips branch cleanup AND dir removal entirely (by design, data-preserving) and nothing later retires the branch | packages/core/src/task-store/archive-lifecycle-2.ts:598-600 |
+| 3 | DISCOVERED GAP — the async delete path (`deleteTaskBackendWithClaimResultImpl`) contained NO `cleanupBranchForTask` call at all; the `FNXC:TaskDeletion` comment (archive-lifecycle.ts:157-158) documented intent the code never delivered — deleted tasks left branches and any unlanded tip behind with no pin | packages/core/src/task-store/archive-lifecycle-2.ts:163-421 |
+| 4 | Hard-removal sweep (`cleanupArchivedTasksImpl`) gave archived tasks no second-chance branch retirement — anything that survived archive-time cleanup lingered forever | packages/core/src/task-store/task-mutation-ops.ts:1754 |
+| 5 | Workspace archive disposer (`registerArchiveWorkspaceWorktreeDisposer`) bypassed the store choke point with bare `git branch -D` per-repo deletion — no pin, no provenance guard | packages/engine/src/executor/wire-executor-lifecycle.ts:195 |
+| 6 | Deployed-version drift: whether the engine deployed on this host runs the cleanup-defaults-true rule is NOT provable from this sandbox (`/home/fusion` engine state is boundary-restricted); recorded as unverifiable — the fix makes every outcome auditable, so future drift is diagnosable from task logs | — |
+
+### What shipped (design locked in the SUBC-037 `design` task document)
+
+- New core helper `packages/core/src/branch/branch-retire.ts` (exported from the package index; no core→engine imports): fixed pipeline resolve tip → `assertSafeGitBranchName` → provenance guard (`classifyTaskBranchOrigin`/`isFusionDeletableBranch`, untouched and load-bearing) → landed proof (`git merge-base --is-ancestor` OR bounded tree-equality scan, `--max-count=500`, for the squash-merge shape where ancestry alone is insufficient — the decision-log Gate B evidence class) → lightweight rescue pin when unlanded (collision policy: same sha reuses the tag, different sha takes a deterministic `-2`/`-3` suffix, never overwrites; pin verified via `rev-parse <tag>^{commit}` before deletion) → `branch -D` → `clearStaleExecutionStartBranchReferences` → best-effort task-log audit for EVERY outcome (`deleted-landed` / `deleted-pinned` / `already-absent` / `kept-operator` / `kept-held`). Worktree-held branches are checked BEFORE pinning, so a held branch is kept with NO pin; deletion failure after pinning keeps the branch (pin harmless). Integration ref ladder: `task.mergeDetails?.mergeTargetBranch` → `task.baseBranch` → `task.executionStartBranch` → core's well-known integration branches; local `refs/heads` only — remote refs are never touched (asserted in tests).
+- Adoption sites: `cleanupBranchForTaskImpl` (the single store-level choke point, now pinning and logging with no silent skips), `cleanupArchivedTasksImpl` (second-chance retirement before directory removal), the async delete path (the documented-but-missing `cleanupBranchForTask` call — mechanism 3 closed, making the `FNXC:TaskDeletion` comment true), and the workspace archive disposer (bare `branch -D` replaced by the helper; per-entry failure collection and the workspace-root refusal guard preserved).
+- Untouched by design: the reactive tip-already-merged recovery (`worktree-branch-conflict-handle.ts`) and the reclaim-stale-active-branches sweep (`self-healing.ts`) — their regression test files stayed green unchanged.
+
+### Verification (all zero-failure, real-git fixtures)
+
+- Core: `packages/core/src/__tests__/branch-retire-rescue-pin.test.ts` — 10 scenarios mapping to the enumerated data states: unlanded → pin at exact tip sha then deleted; ancestry-landed → deleted, no pin; squash tree-equality → deleted, no pin; idempotent re-run; pin reuse at same sha; pin collision → `-2` suffix, original untouched; operator override kept untouched; worktree-held kept with NO pin; canonical-only retirement when `task.branch` is undefined; stale reference clearing.
+- Engine: `packages/engine/src/__tests__/archive-disposal-retire-branch.test.ts` — real two-repo workspace fixtures through the actual wiring: unlanded per-repo branch pinned before deletion, landed branch deleted with no pin.
+- Symptom acceptance: both pre-fix repro shapes are asserted absent post-fix — the lingering shape (every candidate outcome now audited/retired; the delete-path gap closed) and the unpinned-deletion shape (unlanded-tip tests assert the rescue tag resolves to the exact tip sha BEFORE the branch ref disappears); the 1:1 test-name mapping is in the SUBC-037 task log (Step 5).
+- Gates: `pnpm check:changesets`, `pnpm lint`, and scoped typechecks for `@fusion/core` + `@fusion/engine` all zero-failure; package-graph rule holds (engine→core only).
+
+### Upstream delivery status (path B — patch-bundle handoff)
+
+- `viewerPermission` probe (Step 0, verbatim): `gh repo view Runfusion/Fusion --json viewerPermission` → `READ`. No fork, push, or PR was created.
+- Handoff artifacts attached to SUBC-037: `0001-feat-core-retire-closed-task-branches-with-automatic.patch.txt`, `0002-feat-engine-workspace-archive-disposal-retires-branc.patch.txt`, `0003-chore-changeset-document-retire-after-archive-rescue.patch.txt`, and `bundle-summary.txt` (under `.fusion/tasks/SUBC-037/attachments/`; apply with `git am` on a tree at or after `eb7eef4`). The changeset in commit 3 carries the `@runfusion/fusion` patch bump with the operator-facing summary, validated by `pnpm check:changesets`.
+- The operator owns opening the upstream PR and the upstream merge decision.
+
+### Reversibility
+
+- Work-loss safety: rescue pins preserve unlanded tips as lightweight tags before any branch ref deletion, mirroring the operator pins this entry's precedent established; deletion failure after pinning keeps the branch.
+- Code-loss safety: the patch bundle preserves the implementation independent of the disposable clone.
+- This repo's exposure: exactly one commit (this entry); no live refs in the subcontractor-marketplace repo were touched, and the engine clone's commits are scratch.
+
+Owner: operator (upstream PR on Runfusion/Fusion); SUBC-039 owns the agents.md branch-hygiene promotion.
+
