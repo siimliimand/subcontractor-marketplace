@@ -96,3 +96,16 @@ export function createApp() {
 
   return app;
 }
+
+/** One registered route of the staff API: uppercase HTTP method and fully
+ * qualified path, e.g. { method: "POST", path: "/api/requests/:id/time" }.
+ * Middleware registered via app.use appears as method "ALL". */
+export type AppRoute = { method: string; path: string };
+
+/** Introspect the staff API route table: every route createApp() registers,
+ * flattened across mounted sub-routers with merged fully-qualified paths
+ * (Hono merges each mount's base path into the stored route path). Pure —
+ * constructs a fresh app instance; no env or I/O. */
+export function listAppRoutes(): AppRoute[] {
+  return createApp().routes.map((r) => ({ method: r.method, path: r.path }));
+}

@@ -764,4 +764,42 @@ Re-evaluation triggers:
   maintainer-routed fix): the adoption path then becomes dead code and
   should be retired with this entry as the record.
 
+## Append-only audit test now asserts over the real route table — 2026-11-05 (SUBC-021)
+
+**Decision: the "append-only guarantee" test in `test/effort.test.ts` now introspects the real
+staff-API route table instead of the always-empty `appPaths` placeholder SUBC-017 deliberately
+preserved; `src/worker/app.ts` exports a pure, typed `listAppRoutes()` helper to supply it.**
+The vacuous block is gone — not merely retyped: `listAppRoutes()` constructs a fresh
+`createApp()` instance and maps Hono's public `RouterRoute[]` table (`app.routes`, where mounted
+sub-router paths are stored fully qualified) to `{ method, path }` records, so the test's
+mutating filter (`POST/PUT/PATCH/DELETE`) and audit/events-path intersection assert over the
+real surface. Three non-vacuity guards (populated table, `POST /api/requests/:id/time` present,
+`GET /api/audit/export` present) make the empty intersection impossible to pass trivially. The
+DELETE/PATCH probes and the history-equality check are byte-identical to before, and the
+middleware row (`app.use("/api/*")`) registers as method `"ALL"`, so it can never be
+mistaken for a mutating route.
+
+**Why export-a-helper instead of delete-the-block:** the reporter's contract allowed either, not
+both and not neither. Deleting the dead block would leave only the direct DELETE/PATCH probes,
+which cover exactly two verbs on exactly one path shape — the pre-fix proof showed a violating
+`PUT /api/audit-events/:id` route left the whole test green. The helper is ~12 lines of pure,
+typed, additive code (no env, no I/O, no `any`, no casts), so the surface-level guarantee
+("verify the API surface exposes no mutation of events") survives; a temporary violating route
+is now caught by the intersection assertion for every verb class, including the probe-invisible
+`PUT` class.
+
+**No runtime behavior change:** `createApp()`'s registered routes and handlers are untouched
+(the negative-control edits were temporary and reverted, grep-verified); no endpoint,
+permission, or UI behavior changed. The change is net-additive (one type export plus one
+function export; no removals), so a changeset is not required. Separate apps (`webhookApp`,
+`publicApp`, `providerPortal` in `src/worker/index.ts`) are outside the introspected table by
+design; the email webhook's `POST /hooks/email-events` lives in `webhookApp`, so "events"
+paths can never appear in the staff table.
+
+Evidence (2026-11-05, SUBC-021, worktree `subc-021`):
+
+| Factor | Observation | Implication |
+|---|---|---|
+| Negative control (red) | Temporary `app.patch("/api/audit-events/:id")` inside `createApp()` fails the rewritten test at `expect(mutatingEventRoutes).toEqual([])` with `[ { method: "PATCH", path: "/api/audit-events/:id" } ]` in the diff; a `PUT` variant — which left the OLD vacuous test green — now fails the same way | The vacuous pass is gone: the introspection assertion catches every mutating audit-route class, including verbs the direct probes never exercise |
+| Full verification (green) | `npm run build && npm run lint && npm run typecheck && npm test` exit 0 — lint 0 errors; 41 files / 320 tests before and after (identical to the Step 0 baseline) | Net-additive claim holds: no it-cases added or removed, no runtime logic touched; clean production code passes with the non-vacuity guards proving real route data flowed |
 

@@ -3,6 +3,7 @@ import { SELF, env } from "cloudflare:test";
 import { makeAccessToken, accessHeaders } from "./helpers/access";
 import { auditEvents, requests, timeEntries } from "../src/worker/db/schema";
 import { drizzle } from "drizzle-orm/d1";
+import { listAppRoutes } from "../src/worker/app";
 
 const db = () => drizzle(env.DB);
 
@@ -102,17 +103,23 @@ describe("append-only guarantee", () => {
     ).json()) as { id: string }[];
     expect(before.length).toBeGreaterThan(0);
 
-    // verify the API surface exposes no mutation of events: app router actions list
-    const appModule = await import("../src/worker/app");
-    const appPaths = (appModule as typeof appModule & Record<string, unknown>).appPaths;
-    const routes: string[] =
-      typeof appPaths === "function" ? (appPaths as () => string[])() : [];
-    const mutatingEventRoutes = routes.filter((r: unknown) => {
-      const path = String(r);
-      return path.includes("audit") || path.includes("events");
-    });
-    // even if introspection is unavailable, direct attempts fail
-    expect(mutatingEventRoutes.filter((r: string) => /PUT|PATCH|DELETE|post/.test(r))).toEqual([]);
+    // verify the API surface exposes no mutation of audit events (SUBC-021):
+    // introspect the real route table createApp() registers, flattened
+    // across mounted sub-routers
+    const routes = listAppRoutes();
+    const mutatingRoutes = routes.filter((r) =>
+      ["POST", "PUT", "PATCH", "DELETE"].includes(r.method),
+    );
+    // non-vacuity guards: the table is populated, the mutating filter sees a
+    // known write route, and the audit path pattern sees the known GET audit
+    // route — so the empty intersection below cannot pass trivially
+    expect(routes.length).toBeGreaterThan(0);
+    expect(mutatingRoutes.some((r) => r.path === "/api/requests/:id/time")).toBe(true);
+    expect(routes.some((r) => r.method === "GET" && r.path === "/api/audit/export")).toBe(true);
+    const mutatingEventRoutes = mutatingRoutes.filter(
+      (r) => r.path.includes("audit") || r.path.includes("events"),
+    );
+    expect(mutatingEventRoutes).toEqual([]);
 
     const eventId = before[0]!.id;
     const del = await SELF.fetch(`https://example.com/api/audit-events/${eventId}`, {
