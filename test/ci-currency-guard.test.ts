@@ -10,12 +10,23 @@ import { describe, expect, it } from "vitest";
 import {
   LOCK_STALE_MS,
   assertMainRef,
+  buildAdoptionReflogMessage,
   decideAction,
+  isFullSha,
   isLockStale,
   parseLsRemoteMain,
   redactLogLine,
+  refineRefusalWithTreeIdentity,
   shasEqual,
 } from "../scripts/ci-currency-lib.mjs";
+// Imported as TEXT only (?raw — same pattern as test/ci-alert-branch.test.ts
+// imports ci.yml): the orchestrator's module top level runs the gate, so a
+// runtime import would execute it inside the test pool.
+import gateSource from "../scripts/push-main-when-ahead.mjs?raw";
+
+function countOccurrences(haystack: string, needle: string): number {
+  return haystack.split(needle).length - 1;
+}
 
 describe("assertMainRef", () => {
   it('accepts the branch name "main"', () => {
@@ -192,5 +203,196 @@ describe("isLockStale", () => {
   it("dead pid makes any lock stale", () => {
     expect(isLockStale(0, false)).toBe(true);
     expect(isLockStale(1000, false)).toBe(true);
+  });
+});
+
+describe("isFullSha", () => {
+  it("accepts a 40-hex lowercase sha", () => {
+    expect(isFullSha("82aa7efa925249814e0b2544973c6a8dc3b7e493")).toBe(true);
+  });
+
+  it("accepts a 40-hex uppercase sha", () => {
+    expect(isFullSha("82AA7EFA925249814E0B2544973C6A8DC3B7E493")).toBe(true);
+  });
+
+  it("rejects 39- and 41-character strings", () => {
+    expect(isFullSha("82aa7efa925249814e0b2544973c6a8dc3b7e49")).toBe(false);
+    expect(isFullSha("82aa7efa925249814e0b2544973c6a8dc3b7e4933")).toBe(false);
+  });
+
+  it("rejects non-hex characters at sha length", () => {
+    expect(isFullSha("zzzz7efa925249814e0b2544973c6a8dc3b7e493")).toBe(false);
+  });
+
+  it("rejects non-string input", () => {
+    expect(isFullSha(42)).toBe(false);
+    expect(isFullSha(null)).toBe(false);
+    expect(isFullSha(undefined)).toBe(false);
+    expect(isFullSha({ length: 40 })).toBe(false);
+  });
+});
+
+describe("refineRefusalWithTreeIdentity", () => {
+  it("(1, 3, true) → adopt-origin — the SUBC-018 live shape (identical trees)", () => {
+    const result = refineRefusalWithTreeIdentity(1, 3, true);
+    expect(result.action).toBe("adopt-origin");
+    expect(result.reason).toMatch(/DIVERGED \(ahead 1, behind 3\)/);
+    expect(result.reason).toMatch(/IDENTICAL trees/);
+    expect(result.reason).toMatch(/compare-and-swap update-ref of refs\/heads\/main/);
+    expect(result.reason).toMatch(/no push, no merge, no force, no content change/);
+  });
+
+  it("(2, 2, true) → adopt-origin (symmetric diverged shape)", () => {
+    const result = refineRefusalWithTreeIdentity(2, 2, true);
+    expect(result.action).toBe("adopt-origin");
+    expect(result.reason).toMatch(/ahead 2, behind 2/);
+    expect(result.reason).toMatch(/IDENTICAL trees/);
+  });
+
+  it("(2, 2, false) → refuse with the trees-differ wording and manual action", () => {
+    const result = refineRefusalWithTreeIdentity(2, 2, false);
+    expect(result.action).toBe("refuse");
+    expect(result.reason).toMatch(/DIVERGED \(ahead 2, behind 2\)/);
+    expect(result.reason).toMatch(/trees DIFFER/);
+    expect(result.reason).toMatch(/requires a provable tree-identical divergence/);
+    expect(result.reason).toMatch(/merge or rebase — never force-push/);
+  });
+
+  it("(0, 3, true) → refuse (behind-only boundary — adoption is diverged-only)", () => {
+    const result = refineRefusalWithTreeIdentity(0, 3, true);
+    expect(result.action).toBe("refuse");
+    expect(result.reason).toMatch(
+      /applies only when local main and origin\/main have diverged \(ahead above zero and behind above zero\)/
+    );
+  });
+
+  it("(1, 0, true) → refuse (ahead-only never adopts — refinement never returns push)", () => {
+    const result = refineRefusalWithTreeIdentity(1, 0, true);
+    expect(result.action).toBe("refuse");
+  });
+
+  it("(0, 0, true) → refuse (equal never adopts — refinement never returns noop)", () => {
+    const result = refineRefusalWithTreeIdentity(0, 0, true);
+    expect(result.action).toBe("refuse");
+  });
+
+  it("throws for invalid ahead counts with decideAction's exact wording", () => {
+    expect(() => refineRefusalWithTreeIdentity(-1, 0, true)).toThrow(/invalid ahead count/);
+    expect(() => refineRefusalWithTreeIdentity(1.5, 2, true)).toThrow(/invalid ahead count/);
+  });
+
+  it("throws for invalid behind counts", () => {
+    expect(() => refineRefusalWithTreeIdentity(1, -2, true)).toThrow(/invalid behind count/);
+  });
+
+  it("throws unless treesIdentical is strictly boolean (fail-safe on wrong-typed evidence)", () => {
+    // Wrong-typed inputs need a cast: the declaration stays strictly `boolean`
+    // for real callers; these casts are the point — the runtime guard must
+    // throw rather than silently enable/disable adoption.
+    expect(() => refineRefusalWithTreeIdentity(1, 2, "yes" as unknown as boolean)).toThrow(
+      /treesIdentical/
+    );
+    expect(() => refineRefusalWithTreeIdentity(1, 2, undefined as unknown as boolean)).toThrow(
+      /treesIdentical/
+    );
+  });
+});
+
+describe("buildAdoptionReflogMessage", () => {
+  const ORIGIN_TIP = "61f81e8a11111111111111111111111111111111";
+  const LOCAL_TIP = "7bfab34b22222222222222222222222222222222";
+  const TREE = "4a55ec8433333333333333333333333333333333";
+
+  it("pins the exact reflog message format (both tips, both trees, SUBC-027 tag)", () => {
+    expect(
+      buildAdoptionReflogMessage({
+        originTip: ORIGIN_TIP,
+        localTip: LOCAL_TIP,
+        originTree: TREE,
+        localTree: TREE,
+      })
+    ).toBe(
+      `push-main-when-ahead: adopted origin/main ${ORIGIN_TIP} over tree-identical diverged ` +
+        `local main ${LOCAL_TIP} (tree ${TREE} == ${TREE}, SUBC-027)`
+    );
+  });
+
+  it("is unchanged by redactLogLine (shas and fixed prose only — log-hygiene invariant)", () => {
+    const message = buildAdoptionReflogMessage({
+      originTip: ORIGIN_TIP,
+      localTip: LOCAL_TIP,
+      originTree: TREE,
+      localTree: TREE,
+    });
+    expect(redactLogLine(message)).toBe(message);
+  });
+
+  it("throws on a 39-character sha, naming the offending field", () => {
+    expect(() =>
+      buildAdoptionReflogMessage({
+        originTip: ORIGIN_TIP.slice(0, 39),
+        localTip: LOCAL_TIP,
+        originTree: TREE,
+        localTree: TREE,
+      })
+    ).toThrow(/originTip/);
+  });
+
+  it("throws on a refname like main where a sha belongs, naming the offending field", () => {
+    expect(() =>
+      buildAdoptionReflogMessage({
+        originTip: ORIGIN_TIP,
+        localTip: "main",
+        originTree: TREE,
+        localTree: TREE,
+      })
+    ).toThrow(/localTip/);
+  });
+});
+
+describe("push-main-when-ahead.mjs adoption wiring (source-text pins)", () => {
+  it("pins the compare-and-swap argv order: new value (originTip) BEFORE old value (localTip)", () => {
+    // Invariant: git update-ref takes <new-value> <old-value>. Swapping the
+    // two silently moves main BACK to the pre-adoption tip when re-run from
+    // the adopted state (hazard demonstrated in the scratch-repo rehearsal)
+    // — this pin is what keeps the order from regressing.
+    expect(gateSource).toMatch(
+      /update-ref", "-m", reflogMessage, "refs\/heads\/main", originTip, localTip/
+    );
+  });
+
+  it("pins the tree-identity probe argv and the exit-1 differ mapping", () => {
+    // Invariant: `git diff --quiet` exits 1 on DIFFERING trees — expected
+    // control flow, not an error — and the probe must keep mapping
+    // status === 1 to { identical: false } instead of throwing.
+    expect(gateSource).toMatch(/"diff", "--quiet", localTip, originTip/);
+    expect(gateSource).toMatch(/status === 1/);
+  });
+
+  it("assertMainRef guards BOTH the push path and the adoption path", () => {
+    // Invariant: every path that moves refs/heads/main re-asserts the
+    // main-only ref contract (defense-in-depth on top of hardcoded names).
+    expect(countOccurrences(gateSource, "assertMainRef(")).toBeGreaterThanOrEqual(2);
+  });
+
+  it("the authoritative verify chain runs on BOTH the push path and the adoption path", () => {
+    // Invariant: an adopted tip must be proven green by verify-ci-currency
+    // exactly like a pushed tip — no self-heal may skip the currency check.
+    expect(countOccurrences(gateSource, "VERIFY_SCRIPT")).toBeGreaterThanOrEqual(2);
+    expect(countOccurrences(gateSource, "runVerifyChain()")).toBeGreaterThanOrEqual(2);
+  });
+
+  it("the diverged gating ahead > 0 && behind > 0 appears in both the gate refuse branch and --check", () => {
+    // Invariant: adoption is scoped to the diverged shape only — behind-only
+    // and ahead-only never reach the refinement, in either consumer.
+    expect(countOccurrences(gateSource, "ahead > 0 && behind > 0")).toBeGreaterThanOrEqual(2);
+  });
+
+  it("never resets, pulls, or force-pushes anywhere in the gate's code paths", () => {
+    // Invariant: the adoption path touches ONLY the local refs/heads/main
+    // ref via update-ref — no reset --hard, no pull argv, no force flag.
+    expect(gateSource).not.toContain("reset --hard");
+    expect(gateSource).not.toContain('"pull"');
+    expect(gateSource).not.toContain('"--force"');
   });
 });

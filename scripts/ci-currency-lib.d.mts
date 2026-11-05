@@ -22,6 +22,9 @@ export declare function decideAction(ahead: number, behind: number): DecideResul
 /** Extract the sha of `refs/heads/main` from `git ls-remote` output; null when absent. */
 export declare function parseLsRemoteMain(output: string): string | null;
 
+/** True only for a string of exactly 40 hexadecimal characters (full sha). */
+export declare function isFullSha(value: unknown): boolean;
+
 /** Scrub credential material from any string destined for logs or alerts. */
 export declare function redactLogLine(line: string): string;
 
@@ -60,3 +63,27 @@ export declare function findLandingEvidence(
   tip: string,
   opts: { committedAtIso: string | null; allowNoopFallback: boolean }
 ): FindLandingEvidenceResult;
+
+export declare type RefineResult = {
+  action: "adopt-origin" | "refuse";
+  reason: string;
+};
+
+/**
+ * Refine a diverged refusal with proven tree identity (SUBC-027): identical
+ * trees → adopt-origin (compare-and-swap update-ref of the local ref);
+ * every other shape stays a refusal. Never returns push or noop.
+ */
+export declare function refineRefusalWithTreeIdentity(
+  ahead: number,
+  behind: number,
+  treesIdentical: boolean
+): RefineResult;
+
+/** Build the pinned reflog message for a tree-identity adoption (SUBC-027). */
+export declare function buildAdoptionReflogMessage(tips: {
+  originTip: string;
+  localTip: string;
+  originTree: string;
+  localTree: string;
+}): string;

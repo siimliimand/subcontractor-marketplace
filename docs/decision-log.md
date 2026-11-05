@@ -671,4 +671,97 @@ Re-evaluation triggers:
   changes nothing here. (If SUBC-027 adds a new OK grammar, the SUBC-028
   coordination note applies: the parser extends, never assumes.)
 
+## Landing-gate tree-identity adoption — 2026-11-05 (SUBC-027)
+
+**Decision: the landing gate now self-heals the one provably harmless
+mainline divergence. When local `main` and `origin/main` have diverged but
+`git diff --quiet` proves the two tips carry IDENTICAL trees, the gate
+adopts the origin tip locally — a compare-and-swap `git update-ref` of
+`refs/heads/main` with an explicit reflog message naming both tips and both
+trees — then re-asserts convergence (0/0) and chains the authoritative
+`verify-ci-currency.mjs`, exiting 0 when currency holds. Every other
+behind/diverged shape refuses exactly as before. This automates the manual
+repair recipe the ops tasks had been repeating by hand, entirely inside
+repo tooling; no engine behavior changes.**
+
+Context:
+
+- **The recurring incident shape (SUBC-018, 2026-11-04):** the engine's
+  squash-landing and a spec-instructed direct tip push wrote two published
+  histories with identical content — local `main` `7bfab34`, `origin/main`
+  `61f81e8`, identical tree `4a55ec84…`, ahead=1 behind=3. The gate refused
+  at 15:08:31Z (`refuse: DIVERGED (ahead 1, behind 3)`), wrote the alert
+  file, and froze all landings until an operator hand-ran the repair recipe
+  at 15:10:35Z (empty-diff identity proof, then a compare-and-swap
+  `update-ref` of the local ref onto the origin tip). SUBC-022 and SUBC-023
+  repeated that dance by hand for the same wedge class.
+- **The documented option (SUBC-024):** the SUBC-024 findings recorded this
+  exact behavior as the gate-owned variant of the operator repair option —
+  the architecture-dependent alternative to the maintainer-routed engine fix.
+  This task ships it.
+- **Adopted mechanics:** a refuse-branch refinement (`refineRefusalWithTreeIdentity`,
+  pure logic in `ci-currency-lib.mjs`) that converts a diverged refusal into
+  `adopt-origin` only when the trees are identical; an exit-code-interpreted
+  `git diff --quiet` probe (exit 1 = differing trees, expected control flow —
+  anything else throws to the existing outer catch); a compare-and-swap
+  `update-ref` with NEW value (origin tip) before OLD value (local tip) —
+  git's own CAS refuses a stale old-value, and the swapped order would
+  silently revert an already-adopted ref, so a source-text wiring test pins
+  the order; the explicit reflog message (pinned format:
+  `push-main-when-ahead: adopted origin/main <originTip> over tree-identical
+  diverged local main <localTip> (tree <originTree> == <localTree>, SUBC-027)`);
+  a post-adoption convergence re-check (throw unless 0/0); and the shared
+  authoritative verify chain (`runVerifyChain` → `verify-ci-currency.mjs`,
+  now used by both the push and adoption paths). The `--check` probe reports
+  the same refinement read-only (a would-be adoption is named; a probe
+  failure reports `trees-unknown` and never crashes).
+- **Scope boundary:** diverged-only. Behind-only, ahead-only, and equal
+  shapes never reach the refinement — behind-only still refuses, ahead-only
+  still pushes. Adoption never pushes anything: it moves only the local
+  `refs/heads/main` ref (no worktree/index mutation, no merge, no rebase,
+  no force — rehearsal showed `git status --porcelain` stays empty through
+  an adoption).
+- **Failure modes:** a lost CAS race (a concurrent writer moved the ref
+  between probe and update) or a verify failure on a red/missing-tip run
+  lands in the existing outer catch — alert written, exit 1 — and the next
+  gate run re-evaluates from scratch. There is deliberately no retry loop
+  and no rollback: the adoption is content-neutral and aligns local main
+  with engine reality.
+- **SUBC-028 grammar interaction (deliberate non-extension):** the
+  adoption success line (`OK adopted origin/main tip …`) is intentionally
+  NOT evidence in the SUBC-028 landing-gate grammar (`parseGateEvidenceLine`
+  classifies it as `other`). An adoption publishes nothing — it proves the
+  tip was already on origin — so landing verification must keep demanding
+  push-ok/noop-ok evidence; treating adopt-ok as landing evidence would
+  weaken the checker. The SUBC-032 coordination trigger resolves as
+  "no parser change needed", not "parser extended".
+- **Rejected alternative:** the engine-side fix (teaching the engine never
+  to produce diverged-identical landings) remains maintainer-routed per the
+  SUBC-024 findings — this task changes no engine behavior and adds no cron,
+  workflow edit, or new trigger; the gate's three existing triggers inherit
+  the behavior.
+
+Evidence (2026-11-05, worktree `subc-027`): 18 new unit tests plus 6
+source-text wiring assertions in `test/ci-currency-guard.test.ts` (decision
+refinement incl. the SUBC-018 shape `(1, 3, true) → adopt-origin` and the
+behind-only boundary, the verbatim reflog-message pin, `redactLogLine`
+invariance, the CAS new-before-old argv pin, absence pins for
+reset/pull/force); a scratch-repository rehearsal reproducing the exact
+shape (ahead=2 behind=1, empty-diff proof, real-lib reflog message, adoption
+landing with reflog entry + 0/0 convergence + clean porcelain, stale-CAS
+refusal exit 128, swapped-argv hazard observed silently reverting); and a
+live read-only regression (`--check` on converged main → noop line, exit 0,
+no alert file). Full suite green: 43 files / 359 tests; lint 0 errors at the
+recorded 4-warning baseline; typecheck clean.
+
+Re-evaluation triggers:
+
+- A real production adoption fires (reflog message on `main` carries the
+  pinned text) — re-read the incident that produced it and confirm the
+  single-writer contract was not the true culprit (per SUBC-025, the wedge
+  class originates in direct pushes, which remain prohibited).
+- The engine ships its own divergence-proof landing flow (the SUBC-024
+  maintainer-routed fix): the adoption path then becomes dead code and
+  should be retired with this entry as the record.
+
 

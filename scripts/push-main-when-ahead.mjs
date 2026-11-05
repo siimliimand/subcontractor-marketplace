@@ -14,8 +14,14 @@
  *   → push    : git push origin main  (single hardcoded refspec, never --force)
  *               → poll GitHub Actions for a COMPLETED run on the pushed tip
  *               → chain scripts/verify-ci-currency.mjs (authoritative check)
+ *   → adopt   : SUBC-027 — diverged but PROVABLY tree-identical (empty diff
+ *               between the tips) → compare-and-swap update-ref of
+ *               refs/heads/main onto the origin tip with an explicit reflog
+ *               message naming both tips and both trees → re-check
+ *               convergence → chain scripts/verify-ci-currency.mjs
  *   → noop    : currency already holds, remove any stale alert
- *   → refuse  : behind or diverged → loud alert, never auto-merge/force-push
+ *   → refuse  : behind, or diverged with differing trees → loud alert, never
+ *               auto-merge/force-push
  *
  * Triggers (see agents.md, "Auto-push on landing"):
  *   - host cron tick every 10 minutes (fusion user)
@@ -37,8 +43,12 @@
  *
  * Guarantees: only the branch name `main` is ever pushed (assertMainRef +
  * hardcoded refspec); fusion/* worktree branches are NEVER pushed; no
- * --force anywhere; every log/alert line passes redactLogLine(); works from
- * the primary checkout or any linked fusion worktree (git shared refs).
+ * --force anywhere; the SUBC-027 tree-identity adoption moves ONLY the local
+ * refs/heads/main ref (compare-and-swap update-ref with an explicit reflog
+ * message — never a push, merge, rebase, force, or worktree mutation) and
+ * fires only when the empty-diff proof holds; every log/alert line passes
+ * redactLogLine(); works from the primary checkout or any linked fusion
+ * worktree (git shared refs).
  *
  * Requirements: Node >= 18, `git` and `gh` on PATH, gh authenticated.
  */
@@ -59,10 +69,13 @@ import { fileURLToPath } from "node:url";
 import {
   LOCK_STALE_MS,
   assertMainRef,
+  buildAdoptionReflogMessage,
   decideAction,
+  isFullSha,
   isLockStale,
   parseLsRemoteMain,
   redactLogLine,
+  refineRefusalWithTreeIdentity,
   shasEqual,
 } from "./ci-currency-lib.mjs";
 
@@ -130,6 +143,43 @@ function run(cmd, args, timeoutMs = 60_000) {
     const detail = failMsg(err);
     throw new Error(`${cmd} ${args.join(" ")} failed${detail ? `: ${detail}` : ""}`);
   }
+}
+
+/**
+ * Probe whether two tips carry the same tree — the SUBC-027 adoption
+ * evidence. Uses execFileSync directly (NOT the throwing `run` wrapper)
+ * because an empty diff is exit code 1 under --quiet and is expected
+ * control flow, not an error: exit 0 → identical, exit 1 → different trees,
+ * any other failure → throw naming the probe (outer catch → alert → exit 1).
+ */
+function probeTreeIdentity(localTip, originTip) {
+  try {
+    execFileSync("git", ["diff", "--quiet", localTip, originTip], {
+      encoding: "utf8",
+      timeout: GIT_TIMEOUT_MS,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    return { identical: true };
+  } catch (err) {
+    if (err && err.status === 1) {
+      return { identical: false };
+    }
+    const detail = failMsg(err);
+    throw new Error(
+      `tree-identity probe (git diff --quiet ${localTip} ${originTip}) failed${detail ? `: ${detail}` : ""}`
+    );
+  }
+}
+
+/**
+ * Run the authoritative currency check (SUBC-007 artifact — consumed, never
+ * modified) and return its last stdout line. Shared by the push path and the
+ * SUBC-027 adoption path so both end in the identical verify chain.
+ */
+function runVerifyChain() {
+  const verifyOut = run(process.execPath, [VERIFY_SCRIPT], 120_000);
+  const verifyLines = verifyOut.split("\n");
+  return verifyLines[verifyLines.length - 1] || "verify-ci-currency exit 0";
 }
 
 function pidAlive(pid) {
@@ -241,7 +291,33 @@ function main() {
     const ahead = parseInt(run("git", ["rev-list", "--count", "origin/main..main"]), 10);
     const behind = parseInt(run("git", ["rev-list", "--count", "main..origin/main"]), 10);
     const decision = decideAction(ahead, behind);
-    say(`${SCRIPT} --check: ahead=${ahead} behind=${behind} → ${decision.action} (${decision.reason})`);
+    // SUBC-027: a diverged refusal gets the same read-only refinement a gate
+    // run would apply, so the probe never lies about what a gate run would
+    // do. Read-only throughout: never mutates anything, never touches the
+    // alert file; a probe failure reports trees-unknown instead of crashing.
+    let refinement = "";
+    if (decision.action === "refuse" && ahead > 0 && behind > 0) {
+      try {
+        const localTip = run("git", ["rev-parse", "main"]);
+        const originTip = run("git", ["rev-parse", "origin/main"]);
+        if (!isFullSha(localTip) || !isFullSha(originTip)) {
+          throw new Error(`unparsable tip(s): main=${localTip} origin/main=${originTip}`);
+        }
+        const probe = probeTreeIdentity(localTip, originTip);
+        const refined = refineRefusalWithTreeIdentity(ahead, behind, probe.identical);
+        refinement = ` | refinement: ${refined.reason}`;
+        if (refined.action === "adopt-origin") {
+          refinement +=
+            ` | a main-gate run (no --check) would adopt origin/main ${originTip} via ` +
+            `compare-and-swap update-ref and exit 0 if the tip's CI run is green`;
+        }
+      } catch (err) {
+        refinement = ` | trees-unknown (read-only probe failed: ${failMsg(err)})`;
+      }
+    }
+    say(
+      `${SCRIPT} --check: ahead=${ahead} behind=${behind} → ${decision.action} (${decision.reason})${refinement}`
+    );
     return decision.action === "noop" ? 0 : 1;
   }
 
@@ -264,14 +340,78 @@ function main() {
     }
 
     if (decision.action === "refuse") {
+      // SUBC-027: a diverged refusal may be provably harmless — diverged tips
+      // whose trees are IDENTICAL (empty diff). Refine before alerting; every
+      // other refusal shape keeps decideAction's original reason.
+      let effectiveReason = decision.reason;
+      if (ahead > 0 && behind > 0) {
+        const localTip = run("git", ["rev-parse", "main"]);
+        const originTip = run("git", ["rev-parse", "origin/main"]);
+        if (!isFullSha(localTip)) {
+          throw new Error(`unparsable local main tip: ${String(localTip)} (expected a full 40-hex sha)`);
+        }
+        if (!isFullSha(originTip)) {
+          throw new Error(`unparsable origin/main tip: ${String(originTip)} (expected a full 40-hex sha)`);
+        }
+        const probe = probeTreeIdentity(localTip, originTip);
+        const refined = refineRefusalWithTreeIdentity(ahead, behind, probe.identical);
+        say(`${SCRIPT}: tree-identity refinement: ${refined.reason}`);
+        effectiveReason = refined.reason;
+
+        if (refined.action === "adopt-origin") {
+          assertMainRef("main"); // defense-in-depth on top of the hardcoded refname below
+          const [localTree, originTree] = run("git", [
+            "rev-parse",
+            "main^{tree}",
+            "origin/main^{tree}",
+          ]).split(/\s+/);
+          if (!isFullSha(localTree) || !isFullSha(originTree)) {
+            throw new Error(
+              `unparsable tree sha(s): main^{tree}=${String(localTree)} ` +
+                `origin/main^{tree}=${String(originTree)} (expected full 40-hex shas)`
+            );
+          }
+          const reflogMessage = buildAdoptionReflogMessage({
+            originTip,
+            localTip,
+            originTree,
+            localTree,
+          });
+          say(
+            `${SCRIPT}: adopting origin/main ${originTip} over tree-identical diverged local main ` +
+              `${localTip} (compare-and-swap update-ref of refs/heads/main; reflog recorded; ` +
+              `no push, no merge, no worktree change)`
+          );
+          // Compare-and-swap: NEW value (originTip) BEFORE OLD value (localTip).
+          // Swapping the two silently reverts an already-adopted ref; the
+          // wiring test pins this order so it cannot regress.
+          run("git", ["update-ref", "-m", reflogMessage, "refs/heads/main", originTip, localTip]);
+
+          const aheadNow = parseInt(run("git", ["rev-list", "--count", "origin/main..main"]), 10);
+          const behindNow = parseInt(run("git", ["rev-list", "--count", "main..origin/main"]), 10);
+          if (aheadNow !== 0 || behindNow !== 0) {
+            throw new Error(
+              `post-adoption convergence failed: ahead=${aheadNow} behind=${behindNow} (expected 0/0)`
+            );
+          }
+          clearAlert();
+          const verifyLastLine = runVerifyChain();
+          say(`${SCRIPT}: verify-ci-currency: ${verifyLastLine}`);
+          clearAlert();
+          say(
+            `${SCRIPT}: OK adopted origin/main tip ${originTip} (tree-identical diverged local main healed)`
+          );
+          return 0;
+        }
+      }
       const alert =
-        `${ts()} ${SCRIPT} refused: ${decision.reason}. ` +
+        `${ts()} ${SCRIPT} refused: ${effectiveReason}. ` +
         `Next manual action: run "git fetch origin main", reconcile local main with origin/main ` +
         `(merge or rebase — never force-push), then re-run "node scripts/push-main-when-ahead.mjs" and ` +
         `"node scripts/verify-ci-currency.mjs". Do not merge further work onto main until this alert clears.`;
       writeAlert(alert);
-      console.error(`${SCRIPT}: FAIL: ${decision.reason}`);
-      appendLog(`${SCRIPT}: FAIL ${decision.reason}`);
+      console.error(`${SCRIPT}: FAIL: ${effectiveReason}`);
+      appendLog(`${SCRIPT}: FAIL ${effectiveReason}`);
       return 1;
     }
 
@@ -295,10 +435,9 @@ function main() {
         `event=${matched.event} conclusion=${matched.conclusion} url=${matched.html_url}`
     );
 
-    // Authoritative currency check (SUBC-007 artifact — consumed, never modified).
-    const verifyOut = run(process.execPath, [VERIFY_SCRIPT], 120_000);
-    const verifyLines = verifyOut.split("\n");
-    const lastLine = verifyLines[verifyLines.length - 1] || "verify-ci-currency exit 0";
+    // Authoritative currency check (SUBC-007 artifact — consumed, never
+    // modified); shared with the SUBC-027 adoption path via runVerifyChain().
+    const lastLine = runVerifyChain();
     say(`${SCRIPT}: verify-ci-currency: ${lastLine}`);
 
     clearAlert();

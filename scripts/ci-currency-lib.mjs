@@ -14,7 +14,12 @@
  * Guarantees encoded here:
  *   - ONLY the branch name `main` is ever a valid ref to operate on
  *     (`fusion/*` task branches are never pushed).
- *   - Never push when behind or diverged (no auto-merge, no force).
+ *   - Never push when behind or diverged (no auto-merge, no force). The one
+ *     provably harmless divergence — diverged tips with IDENTICAL trees —
+ *     may instead be healed by ADOPTING the origin tip locally
+ *     (refineRefusalWithTreeIdentity + buildAdoptionReflogMessage, SUBC-027:
+ *     a compare-and-swap update-ref of refs/heads/main only — still never a
+ *     push, merge, or force).
  *   - Any string destined for a log or alert file is scrubbed of
  *     credential material before it is written.
  */
@@ -80,6 +85,20 @@ export function decideAction(ahead, behind) {
 }
 
 /**
+ * True only for a string of exactly 40 hexadecimal characters — a full
+ * object id as printed by `git rev-parse` (uppercase accepted; comparisons
+ * elsewhere stay case-insensitive). Owns the shape previously inlined in
+ * parseLsRemoteMain, and doubles as the input validator for the SUBC-027
+ * adoption helpers below.
+ *
+ * @param {unknown} value
+ * @returns {boolean}
+ */
+export function isFullSha(value) {
+  return typeof value === "string" && /^[0-9a-f]{40}$/i.test(value);
+}
+
+/**
  * Extract the sha of `refs/heads/main` from `git ls-remote` output.
  * Handles single-line and multi-line listings; ignores lines that merely
  * contain similar names (e.g. `refs/heads/mainx`) and symref hint lines
@@ -98,11 +117,97 @@ export function parseLsRemoteMain(output) {
     const sha = fields[0];
     const refname = fields[fields.length - 1];
     if (refname !== "refs/heads/main") continue;
-    if (typeof sha === "string" && /^[0-9a-f]{40}$/i.test(sha)) {
+    if (isFullSha(sha)) {
       return sha.toLowerCase();
     }
   }
   return null;
+}
+
+/**
+ * Refine a diverged-shape refusal (ahead > 0 && behind > 0) with proven tree
+ * identity — the SUBC-027 automation of the manual repair recipe repeated by
+ * hand across the SUBC-018/SUBC-022/SUBC-023-class ops tasks. When the two
+ * tips carry the SAME tree (empty `git diff` proof), the landing gate may
+ * heal the divergence by adopting the origin tip via a compare-and-swap
+ * update-ref of refs/heads/main — content-neutral, local-ref-only.
+ *
+ * Never returns push or noop: the refinement only ever converts a diverged
+ * refusal into adopt-origin, or leaves it a refusal. Behind-only, ahead-only,
+ * and equal shapes stay refusals — adoption is scoped to diverged only.
+ *
+ * @param {number} ahead commits on local main missing from origin/main
+ * @param {number} behind commits on origin/main missing from local main
+ * @param {boolean} treesIdentical whether an empty-diff probe proved the tips' trees identical
+ * @returns {{ action: "adopt-origin" | "refuse", reason: string }}
+ */
+export function refineRefusalWithTreeIdentity(ahead, behind, treesIdentical) {
+  if (!Number.isInteger(ahead) || ahead < 0) {
+    throw new Error(`invalid ahead count: ${String(ahead)} (must be a non-negative integer)`);
+  }
+  if (!Number.isInteger(behind) || behind < 0) {
+    throw new Error(`invalid behind count: ${String(behind)} (must be a non-negative integer)`);
+  }
+  if (typeof treesIdentical !== "boolean") {
+    throw new Error(
+      `invalid treesIdentical evidence: ${String(treesIdentical)} ` +
+        `(must be a boolean — wrong-typed evidence must never silently enable or disable adoption)`
+    );
+  }
+  if (ahead > 0 && behind > 0) {
+    if (treesIdentical) {
+      return {
+        action: "adopt-origin",
+        reason:
+          `local main and origin/main have DIVERGED (ahead ${ahead}, behind ${behind}) with ` +
+          `IDENTICAL trees (empty-diff proof): adopting the origin tip via compare-and-swap ` +
+          `update-ref of refs/heads/main (no push, no merge, no force, no content change)`,
+      };
+    }
+    return {
+      action: "refuse",
+      reason:
+        `local main and origin/main have DIVERGED (ahead ${ahead}, behind ${behind}) and the ` +
+        `trees DIFFER: adoption requires a provable tree-identical divergence (empty diff). ` +
+        `Required manual action: git fetch origin main, reconcile locally (merge or rebase — ` +
+        `never force-push), then re-run`,
+    };
+  }
+  return {
+    action: "refuse",
+    reason:
+      `tree-identity adoption applies only when local main and origin/main have diverged ` +
+      `(ahead above zero and behind above zero); this shape (ahead ${ahead}, behind ${behind}) ` +
+      `keeps the original decision`,
+  };
+}
+
+/**
+ * Build the reflog message recorded by a tree-identity adoption (SUBC-027).
+ * The format is pinned verbatim by a unit test: it is the audit record that
+ * names both tips and both trees, and it deliberately carries only shas and
+ * fixed prose — redactLogLine leaves it unchanged.
+ *
+ * @param {{ originTip: string, localTip: string, originTree: string, localTree: string }} tips
+ * @returns {string}
+ */
+export function buildAdoptionReflogMessage({ originTip, localTip, originTree, localTree }) {
+  const fields = [
+    ["originTip", originTip],
+    ["localTip", localTip],
+    ["originTree", originTree],
+    ["localTree", localTree],
+  ];
+  for (const [field, value] of fields) {
+    if (!isFullSha(value)) {
+      throw new Error(`invalid ${field}: ${String(value)} (must be a full 40-hex sha)`);
+    }
+  }
+  return (
+    `push-main-when-ahead: adopted origin/main ${originTip} over ` +
+    `tree-identical diverged local main ${localTip} ` +
+    `(tree ${originTree} == ${localTree}, SUBC-027)`
+  );
 }
 
 /** Matches classic/OAuth/server app token shapes: ghp_/gho_/ghu_/ghs_/ghr_ + hex-ish body. */

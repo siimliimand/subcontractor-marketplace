@@ -139,10 +139,14 @@ trigger is now automated.
   the SUBC-008 acceptance; the full choice rationale and rejected alternatives
   are recorded in `docs/decision-log.md`, "Auto-push mechanism decision —
   3 November 2026 (SUBC-008)"). `scripts/push-main-when-ahead.mjs` fetches
-  `origin main`, computes ahead/behind, and acts: **ahead → `git push origin
-  main` → poll Actions for a COMPLETED run on the pushed tip → chain
-  `scripts/verify-ci-currency.mjs`**; **current → no-op**; **behind/diverged →
-  refuse loudly, never auto-merge, never force**. Pure decision logic lives in
+  `origin main`, computes ahead/behind, and acts: **current → no-op**;
+  **ahead → `git push origin main` → poll Actions for a COMPLETED run on the
+  pushed tip → chain `scripts/verify-ci-currency.mjs`**; **diverged but
+  tree-identical (empty-diff proof) → adopt the origin tip locally via
+  compare-and-swap `update-ref` with an explicit reflog message, then verify
+  (SUBC-027)**; **every other behind/diverged state → refuse loudly, never
+  auto-merge, never force**. Pure decision logic — including the SUBC-027
+  tree-identity adoption refinement — lives in
   `scripts/ci-currency-lib.mjs` (unit-tested in
   `test/ci-currency-guard.test.ts`).
 - **Why not a merger-path hook or a git hook:** the Fusion engine's merge flow
@@ -234,8 +238,12 @@ trigger is now automated.
   refspec + `assertMainRef`; unknown argv refused); `fusion/*` task branches
   are NEVER pushed; never `--force`; every log/alert line is scrubbed of
   `ghp_`/`gho_`/`github_pat_`/`x-access-token:` material before it is written;
-  no credential material in commits. The script works from the primary
-  checkout or any linked fusion worktree (git shared refs).
+  no credential material in commits. The SUBC-027 tree-identity adoption
+  moves only the local `refs/heads/main` ref (never a push, merge, rebase, or
+  worktree mutation), fires only when `git diff` proves the tips' trees
+  identical, and records both tips and trees in the reflog message. The
+  script works from the primary checkout or any linked fusion worktree (git
+  shared refs).
 - **Single-writer landing contract (added by SUBC-025, 2026-11-05; see
   "Non-watchdog push of 61f81e8 attributed — 2026-11-04 (SUBC-025)" in
   `docs/decision-log.md` for the incident that motivated it):**
