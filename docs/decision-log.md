@@ -997,3 +997,51 @@ Receipt-shape drift vs the spec's predictions (premise-moved protocol): the matr
 Convergence heal during execution: main was ahead-only by 3 unpublished landings (SUBC-042 `88a8639`, SUBC-036 `1b16be5`, SUBC-037 `9df649f`) when the control matrix came due; healed through the gate itself (single writer): `push-main-when-ahead.mjs` exit 0, pushed tip `9df649f8e297b969b3cd42a8db04e7ae95f5bb57`, Actions run #34 id 42013976106 success, chained currency OK, convergence 0/0 — the heal's own landing received the first live exact-tip receipt under the new receipt format.
 
 Own-landing transient (SUBC-028 precedent): an executor session cannot flush its own landing — the engine lands this task's branch after execution, so the gate run plus checker on the landed tip run at landing time (or the next ahead-only heal), and a post-landing re-run of `--strict 50433302…` must still exit 0: descendant evidence is additive and the task's own landing only adds newer push-ok lines to the log.
+
+## Deployed retire-after-archive verification: probe infeasible from execution sessions, drift watch armed — 2026-11-05 (SUBC-051)
+
+**Decision: the deployed engine's cleanup-defaults-true status remains UNPROVEN and is recorded as PROBE-INFEASIBLE from a task-execution session — every task-creation channel is engine-refused while a board task executes, so the designed disposable-probe recipe cannot run from here; confirmation is explicitly left open.** All passive channels are consistent with a pre-patch deployed build and none individually proves one; upstream delivery is outstanding, so the delivery-state fact at probe time is PENDING-DELIVERY (patch absent upstream, operator handoff outstanding). This entry arms the zero-mutation drift watch, fixes the outcome-token grammar, and records a mechanical re-check recipe so the first capable session closes the question — it records no confirmation either way.
+
+### Live evidence at execution (2026-11-05, worktree fusion/subc-051 at 9924a74, an ancestor of main)
+
+- Repo currency: main == origin/main == `5d867ae6054c4e5afcaa98c15492d5862e0e527c`, `git rev-list --left-right --count main...origin/main` = 0/0 (planning-time baseline dfa517f had legitimately advanced: the SUBC-047 landing 9924a74, then a docs README renewal).
+- Upstream delivery: `git ls-remote https://github.com/Runfusion/Fusion.git refs/heads/main` → `eb7eef49d5a0fe3e84e99be30e8ed9622a694e35` — exactly the tree the SUBC-037 bundle was authored against, not one commit past it. Targeted ls-remote for `refs/heads/subc-037`, `refs/tags/subc-037`, `refs/heads/retire-after-archive` → zero refs. The patch is NOT delivered upstream; the operator PR remains open.
+- Deployed-version identity: the permitted best-effort attempt (`npm ls -g --depth=0`, allowlisted binary, no path literals) shows the global npm tree holds only @fission-ai/openspec, corepack, npm, playwright, pnpm — no fusion engine package; node v22.14.0. Outcome: NOT-DETERMINABLE as expected (host engine install boundary-restricted; mechanism 6 of the SUBC-037 entry is unchanged by this attempt).
+- Passive drift indicators: `git branch --list fusion/subc-030` → present; `git tag --list rescue/fusion-subc-030` → absent (unchanged from planning). SUBC-030's log tail read via fn_task_show (fn_task_logs_read still carries no task_id parameter in executor sessions — the undeployed SUBC-036 engine patch): zero outcome tokens. Bounded historical scan of the three most recently archived tasks (SUBC-033, SUBC-034, SUBC-035, all archived in the same instant): each one's newest log line is the plain engine event "Task archived" — zero outcome tokens on any passive channel.
+
+### Why the designed probe could not run (verbatim refusal ladder)
+
+The probe recipe (below) needs exactly one disposable planning task. From this session every creation surface refused at call time, with identical engine policy text:
+
+1. `fn_task_create(<probe brief>)` → refused: "fn_task_create is unavailable while executing a board task. Record out-of-scope findings as completion recommendations, and implement in-scope work directly in this task."
+2. `fn_task_duplicate(id=SUBC-051)` → refused: "fn_task_duplicate is unavailable while executing a board task. Record out-of-scope findings as completion recommendations, and implement in-scope work directly in this task."
+3. `fn_task_plan(<probe brief>)` → refused: "fn_task_plan is unavailable while executing a board task. Record out-of-scope findings as completion recommendations, and implement in-scope work directly in this task."
+
+Issue/MR imports and `fn_task_refine` were evaluated and deliberately rejected: they would fabricate the probe out of real issue content or a false refinement lineage, violating the probe's own hygiene rule (never archive a real task as a probe). No honest channel to create a disposable planning task exists from a board-task session; no probe task and no probe branch were created, so there is no probe residue. Per the plan's own fallback matrix this classifies PROBE-INFEASIBLE — passive-channel evidence recorded, confirmation left open — never a fabricated confirmation.
+
+### Outcome-token grammar (the SUBC-037 contract future archives are watched against)
+
+| Token | Meaning |
+|---|---|
+| deleted-landed | tip proven landed (ancestry or bounded tree-equality) — branch deleted with no pin |
+| deleted-pinned | unlanded tip gained a lightweight rescue/ pin verified at the exact sha BEFORE the branch ref disappeared |
+| already-absent | branch did not exist — idempotent no-op |
+| kept-operator | operator-provenance branch untouched |
+| kept-held | worktree-held branch kept with NO pin |
+
+### Drift-diagnosis protocol going forward
+
+- Archive-time silence is the alarm: an archive of a task with a candidate fusion/ branch (existed, no worktree hold, fusion-deletable name) that produces NO outcome token while an outcome was possible is direct evidence of a pre-patch deployed build — readable from task logs alone, no host access. The flip side is equally diagnostic: a captured silence-plus-deletion where an outcome was possible proves the OLDER cleanup-defaults-true rule was already live before the patch (the audit lines are the new part).
+- The fusion/subc-030 rescue-pin watch is the zero-mutation alarm: if a future run finds `rescue/fusion-subc-030` existing and `fusion/subc-030` gone with a deleted-pinned line on SUBC-030's log, that ALONE proves a patched engine is live (tip 8200629 is unlanded, so only the pin path fits).
+- Passive absence is weak evidence: silent skip is also pre-patch behavior for held/operator/absent shapes, so token absence classifies drift only when an outcome was possible — anchor drift claims to a designed probe or to the pin watch, not to bare absence.
+
+### Re-check recipe (mechanical; run from any session that can create tasks — an operator, a durable triage/planning agent, or a future engine change)
+
+1. Record currency: full SHAs of main and origin/main plus the rev-list left/right count.
+2. Probe upstream: `git ls-remote https://github.com/Runfusion/Fusion.git refs/heads/main`; record whether main moved past eb7eef4; targeted ls-remote for subc-037 / retire-after-archive refs; if main advanced, shallow-clone into scratch.local/fusion-upstream and grep the tree for branch-retire.ts and the five tokens.
+3. Create ONE disposable planning task (no workflow, no work), create its canonical `fusion/<id>` branch at the current main tip, verify ancestry (`git merge-base --is-ancestor <tip> main`), archive the task, then read its task log AND the calling session's log for the five tokens, and check `git branch --list fusion/<id>`.
+4. Classify: any captured outcome line → patched engine live, token names the exact outcome; branch gone with captured silence → pre-patch build already running the older silent cleanup; branch present with captured silence → pre-patch silent skip, re-check the passive indicators; creation channel refused again → remain PROBE-INFEASIBLE.
+5. Append the new disposition to this log as one more docs-only commit, superseding this entry's disposition.
+
+Owner: deploy verification — operator, until a captured probe outcome line lands; re-check — any future task or heartbeat session that can create tasks can rerun the recipe mechanically.
+
