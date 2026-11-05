@@ -827,6 +827,70 @@ Execution and proof (2026-11-05, worktree `subc-038`, main at `bdba76176b7ead93d
 - Post-state: `rescue/fusion-subc-009` pinned at `5a47d3e56480a56e85cd0f2689e8eb0592f2957a`, local-only, never pushed (zero push commands run; `git ls-remote origin` byte-identical before and after — no `fusion/subc-009`, no tags); `fusion/subc-009` deleted (`git branch --list` empty); main tip unchanged. The pin joins the existing reversible-deletion precedent (`rescue/fusion-subc-006`, `rescue/fusion-subc-011`, `rescue/subc-023-old-main`).
 - Successors: SUBC-008 (done) remains the sole surviving owner of the deliverable SUBC-009 re-filed; engine-side auto-retire of closed-task branches is SUBC-037, and promotion of a durable branch-hygiene policy into agents.md is SUBC-039 — this entry records the one-time manual disposition those successors automate and codify.
 
+## Engine patch handoff: optional task targeting for fn_task_logs_read — 2026-11-05 (SUBC-036)
+
+**Decision: the Fusion engine's task-bound `fn_task_logs_read` tool is patched UPSTREAM to accept an
+optional read-only `task_id` parameter (sibling-task log reads, falling back to the session's bound
+task when blank or omitted) — the patch is authored against the public engine, proven with the
+engine's own test suite, packaged as a clean-applying two-commit patch, and handed to the operator
+with a runbook. It is NOT applied to the running engine: the running install lives outside this
+repository and its task sandboxes, and restarting the orchestrator is operator authority.** Until
+the operator applies it, sibling agent-log evidence in this repo's audit and attribution work must
+continue to come from sibling task.json persisted step reports (the SUBC-025 substitute channel).
+This task deliberately did not touch the engine install, the gating classifications
+(`fn_task_logs_read` stays in `COORDINATION_EXEMPT_TOOLS` and
+`AGENT_PERMISSION_POLICY_EXEMPT_TOOL_EXAMPLES`), the chat/CLI registrations, or the store schema.
+
+Provenance:
+
+- **Origin (verbatim, SUBC-025 entry above):** "the SUBC-025 executor could not replay that log
+  directly because `fn_task_logs_read` is current-task-scoped, and instead re-verified the same
+  events through the persisted SUBC-018 step reports" — the substitute-labeled reconstruction this
+  patch eliminates.
+- **Pinned base:** public engine clone at `eb7eef49d5a0fe3e84e99be30e8ed9622a694e35`
+  (@fusion/engine 0.78.0-beta.9, public main on 2026-11-05; equals the planning-time base), branch
+  `subc-036-task-logs-read-targeting`, commits `32ebd3c` (feat) + `887496b` (test).
+- **Changed surfaces — task-bound registration only:** `taskLogsReadParams` gains
+  `task_id: Type.Optional(Type.String(...))`; `createTaskLogsReadTool.execute` resolves a non-blank
+  trimmed `task_id` over the bound task (the CLI `fn_workflow_select` trim-and-fallback precedent);
+  the tool description mentions sibling targeting; a dated `FNXC:TaskLogsRead 2026-11-05-08:41`
+  comment documents the contract. Untouched by design: `chatTaskLogsReadParams` and
+  `createChatTaskLogsReadTool` (chat keeps REQUIRED `task_id`), the CLI extension registration
+  (keeps REQUIRED `id`), the shared `readTaskAgentLogs`/`buildTaskAgentLogReadText` builder
+  (identical 12,000-character budgeting and `details.taskId` reporting), all four task-bound
+  instantiation sites (`step-session-executor.ts:1546`, `agent-heartbeat.ts:4626`,
+  `run-implementation.ts:2106`, `shared-worker-tools.ts:56-57`), both exempt-tool lists, and the
+  store read path (`getAgentLogs`/`getAgentLogCount` — no schema or migration changes).
+- **Test evidence (engine's own vitest, in-clone):** targeted suite
+  `pnpm exec vitest run src/__tests__/agent-task-logs-read-tools.test.ts` → 13 passed (13): the 7
+  pre-existing cases (paging normalization, filter-before-pagination, stream preservation, caps,
+  preview/full modes, chat-requires-task_id) unmodified, plus 6 new scenarios — omitted-`task_id`
+  bound fallback, sibling read with resolved `details.taskId`, whitespace-only fallback,
+  sibling+type+limit filter composition, schema declares `task_id` while the required list excludes
+  it, and unknown-id renders "(no matching log entries)" without throwing. Named regressions green:
+  `gating-classifications.test.ts` and `heartbeat-executor.test.ts`; CLI `extension.test.ts` +
+  `extension-integration.test.ts` green after building the unbuilt workspace plugin
+  `@fusion-plugin-examples/antigravity-runtime` (fresh-clone bootstrap gap, proven pre-existing by
+  reproducing it at the pristine base). `pnpm --filter @fusion/engine typecheck` exit 0;
+  `check-changeset-format.mjs` exit 0; `check-fnxc-future-dates.mjs` reports no future-dated stamps.
+- **Clean-apply check:** `git format-patch eb7eef4 --stdout` (214 lines, 2 commits);
+  `git apply --check` exit 0 against a pristine detached `eb7eef4` checkout. The patch text is
+  attached to the task (`subc-036-fn-task-logs-read-task-id.patch.txt` — the attachment surface
+  rejects the `.patch` extension; content byte-identical) and stored as task document `engine-patch`.
+- **Operator runbook:** task document `docs` — apply instructions (`git am` or
+  `git apply --3way`), the targeted verification command, engine rebuild/restart per the operator's
+  own procedure, the post-apply live acceptance recipe (from any task-bound session,
+  `fn_task_logs_read` with `task_id` set to a sibling id renders that sibling's entries with
+  `details.taskId` equal to the sibling id), and rollback (`git revert` of the patch commits).
+
+Consequences: (1) until the operator applies the patch and restarts the engine, cross-task log
+attribution in this repo keeps using the task.json step-report substitute channel — this entry
+deliberately does NOT claim the capability is live; (2) the session's bound task remains the
+implicit default, so existing callers see zero behavior change; (3) a post-apply capability note in
+agents.md belongs to the follow-up that verifies the live recipe, not to this handoff; (4) the
+patch targets the task-bound surface only, so chat and CLI tool contracts and both exempt-tool
+classifications are unaffected whether or not it is applied.
+
 ## MTR tyyp filtering evaluation gated — 2026-11-05 (SUBC-042)
 
 **Decision: GATE-BLOCKED — the evaluation was NOT performed and no ADOPT / KEEP-UNFILTERED / DEFER verdict is recorded.** The task's precondition gate requires durable AFTER-counts evidence of the APPLIED production re-import, recorded against the SUBC-029 entry per its re-evaluation trigger (:607); no such record exists anywhere durable. The import stays exactly as validated (unfiltered; the SUBC-015 baseline of 5,097 matched undertakers / 8,095 upsert rows stands); no code, fixture, band, or count changed. The SUBC-015 known-limitation bullet ("`tyyp` is not filtered …", :210) remains the premise, unchanged, for the future session that runs the evaluation.
