@@ -827,3 +827,27 @@ Execution and proof (2026-11-05, worktree `subc-038`, main at `bdba76176b7ead93d
 - Post-state: `rescue/fusion-subc-009` pinned at `5a47d3e56480a56e85cd0f2689e8eb0592f2957a`, local-only, never pushed (zero push commands run; `git ls-remote origin` byte-identical before and after — no `fusion/subc-009`, no tags); `fusion/subc-009` deleted (`git branch --list` empty); main tip unchanged. The pin joins the existing reversible-deletion precedent (`rescue/fusion-subc-006`, `rescue/fusion-subc-011`, `rescue/subc-023-old-main`).
 - Successors: SUBC-008 (done) remains the sole surviving owner of the deliverable SUBC-009 re-filed; engine-side auto-retire of closed-task branches is SUBC-037, and promotion of a durable branch-hygiene policy into agents.md is SUBC-039 — this entry records the one-time manual disposition those successors automate and codify.
 
+## MTR tyyp filtering evaluation gated — 2026-11-05 (SUBC-042)
+
+**Decision: GATE-BLOCKED — the evaluation was NOT performed and no ADOPT / KEEP-UNFILTERED / DEFER verdict is recorded.** The task's precondition gate requires durable AFTER-counts evidence of the APPLIED production re-import, recorded against the SUBC-029 entry per its re-evaluation trigger (:607); no such record exists anywhere durable. The import stays exactly as validated (unfiltered; the SUBC-015 baseline of 5,097 matched undertakers / 8,095 upsert rows stands); no code, fixture, band, or count changed. The SUBC-015 known-limitation bullet ("`tyyp` is not filtered …", :210) remains the premise, unchanged, for the future session that runs the evaluation.
+
+**Gate evidence (searches performed 2026-11-05, live at HEAD `42783f9`):**
+
+| Search | Result |
+| --- | --- |
+| `grep -n "AFTER" docs/decision-log.md` | Hits only at :280 (SUBC-020 engine-lands-after-execution transient), :446 (SUBC-028 accepted transient), and :607 (the SUBC-029 re-evaluation trigger naming evidence that does not yet exist). No hit records an observed count. |
+| Heading scan past the SUBC-029 entry (:554) | Later entries are SUBC-032 (:613), SUBC-027 (:674), SUBC-021 (:767), SUBC-038 (:806) — none concerns the MTR re-import or records counts. |
+| Full board enumeration (all columns) | No task in any column records an applied re-import or observed AFTER counts; done-column tasks after SUBC-029 are landing-flush/CI work only. |
+| SUBC-029 task record | Completion summary records the runbook handoff ("recorded here as a handoff, NOT as applied", :559-560); its spawned follow-ups (SUBC-041, SUBC-042) carry no operator results. |
+| SUBC-012 (the consumer the applied re-import would unblock) | Paused in todo since 2026-11-03; its spot-check and flag-flip steps are untouched — no operator application activity. |
+
+**Evidence inventory.** EXISTS: the SUBC-029 operator handoff (`reimport-runbook` task document; expected count bands at :598-601) and the SUBC-015 DRY-RUN baseline on the real 2026-11-04 export (:220-222 — undertakers read 56,666; matched 5,097; upsert rows 8,095: electrical 3,740, plumbing 910, hvac 910, drywall 845, flooring 845, painting 845, which sums exactly to 8,095). MISSING: any durable record of an APPLIED production re-import with observed AFTER counts. The dry-run-vs-applied distinction is load-bearing — the 5,097/8,095 figures were measured DRY-RUN and are not applied evidence, so a filtering evaluation on them would evaluate an unmeasured applied baseline.
+
+**What was NOT done:** no importer change (the parser retains zero tyyp handling); no re-import applied by this task; no fixture, band documentation, or count modified; no per-tyyp distribution captured; no ADOPT / KEEP-UNFILTERED / DEFER procedure run and no follow-up task spawned; no counts fabricated or estimated anywhere; existing entries untouched (the file stays append-only).
+
+**Re-evaluation trigger:** the operator applies the `reimport-runbook` (SUBC-029 task document) in production and records the observed AFTER counts durably against the SUBC-029 entry (the :607 trigger) — then a fresh SUBC-042 execution session re-enters the precondition gate: durable applied evidence inside the :598-601 bands proceeds to the full evidence-corpus and decision procedure; counts outside the bands stop with a recorded band table. SUBC-012's TTJA catalogue confirmation and any future export schema change (:198) remain downstream triggers.
+
+**Closure mechanics (SUBC-020/028 precedent):** the engine requires at least one commit to close a task and freezes cards only for host-resource, network, model-provider, or credential causes, so this operator-input wait could not park terminally without a commit; the sanctioned closure records THIS gate-evidence entry — the only file this task's own constraints permit on any branch — explicitly as a gate record, not a verdict. This documentation commit lands via the engine AFTER execution, leaving local main one commit ahead until the landing-gate flush; per agents.md the landing is complete only when the gate publishes the tip.
+
+Owner: founder (operator applies the runbook and records the AFTER counts; agent sessions own the re-entry evaluation).
+
