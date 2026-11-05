@@ -14,6 +14,12 @@
  *   → push    : git push origin main  (single hardcoded refspec, never --force)
  *               → poll GitHub Actions for a COMPLETED run on the pushed tip
  *               → chain scripts/verify-ci-currency.mjs (authoritative check)
+ *               → SUBC-058: on a failed post-push verify, re-fetch and
+ *               re-check ahead/behind once, then loop the push path while
+ *               main is strictly ahead-only (a concurrent landing joined
+ *               mid-flush) — bounded at MAX_PUSH_ATTEMPTS = 3 pushes per
+ *               invocation, lock marker refreshed per attempt; every other
+ *               shape rethrows to the outer catch
  *   → adopt   : SUBC-027 — diverged but PROVABLY tree-identical (empty diff
  *               between the tips) → compare-and-swap update-ref of
  *               refs/heads/main onto the origin tip with an explicit reflog
@@ -60,6 +66,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -77,6 +84,7 @@ import {
   redactLogLine,
   refineRefusalWithTreeIdentity,
   shasEqual,
+  shouldLoopPushPath,
 } from "./ci-currency-lib.mjs";
 
 const SCRIPT = "push-main-when-ahead";
@@ -86,6 +94,10 @@ const REPO_DEFAULT = "siimliimand/subcontractor-marketplace";
 const POLL_INTERVAL_MS = 15_000;
 const POLL_BUDGET_MS = 8 * 60 * 1000; // SUBC-007 runs finish in 22–48 s; 8 min is a generous cap
 const GIT_TIMEOUT_MS = 120_000;
+// SUBC-058: bound on the mid-flush retry loop — at most 3 pushes per
+// invocation. A landing joining local main while the gate polls CI retries
+// the push path; bound exhaustion still alerts via the outer catch.
+const MAX_PUSH_ATTEMPTS = 3;
 
 const STATE_DIR = join(homedir(), ".local", "state", "ci-currency");
 const LOG_FILE = join(STATE_DIR, "auto-push.log");
@@ -227,6 +239,23 @@ function releaseLock() {
     rmSync(LOCK_DIR, { recursive: true, force: true });
   } catch {
     // nothing to do
+  }
+}
+
+/**
+ * SUBC-058: refresh the lock marker so a long bounded retry loop (each
+ * attempt can push and then poll CI for up to POLL_BUDGET_MS) cannot be
+ * stolen as stale mid-flight by isLockStale. Rewrites the pid file with the
+ * current pid and bumps the lock dir's mtime; both operations
+ * swallow-and-continue on error — a refresh failure must never fail an
+ * otherwise healthy run (the next attempt re-tries the refresh).
+ */
+function refreshLockMarker() {
+  try {
+    writeFileSync(LOCK_PID_FILE, String(process.pid));
+    utimesSync(LOCK_DIR, new Date(), new Date());
+  } catch {
+    // best-effort marker refresh only
   }
 }
 
@@ -416,33 +445,101 @@ function main() {
     }
 
     // decision.action === "push"
-    assertMainRef("main"); // defense-in-depth on top of the hardcoded refspec below
-    const localMain = run("git", ["rev-parse", "main"]);
-    say(`${SCRIPT}: pushing main (${localMain}) to origin/main (single hardcoded refspec, no --force)`);
-    run("git", ["push", "origin", "main"], GIT_TIMEOUT_MS);
+    // SUBC-058: the push path is wrapped in a bounded mid-flush retry loop.
+    // A concurrent engine landing can join local main while this gate is
+    // polling CI (observed live on SUBC-052: tip 906c1711 was pushed and its
+    // Actions run completed with conclusion=success; landing f961eb0 joined
+    // local main during the ~95 s poll; the post-push verify then failed and
+    // the invocation exited 1 with a transient alert even though the push had
+    // already landed green). After a failed post-push verify we re-fetch,
+    // re-count ahead/behind, and loop the push path exactly while the state
+    // stays strictly ahead-only (the pure shouldLoopPushPath decision in
+    // ci-currency-lib.mjs), bounded at MAX_PUSH_ATTEMPTS pushes per
+    // invocation. Every non-retryable shape (behind > 0, diverged, bound
+    // exhausted, currency holding) rethrows verifyErr UNCHANGED into the
+    // outer catch below — the refuse semantics stay with the next
+    // invocation's decideAction (SUBC-045 owns behind-only adoption).
+    for (let attempt = 1; attempt <= MAX_PUSH_ATTEMPTS; attempt++) {
+      refreshLockMarker(); // keep the lock alive across a long multi-push loop
+      assertMainRef("main"); // defense-in-depth on top of the hardcoded refspec below
+      const localMain = run("git", ["rev-parse", "main"]);
+      say(`${SCRIPT}: pushing main (${localMain}) to origin/main (single hardcoded refspec, no --force)`);
+      run("git", ["push", "origin", "main"], GIT_TIMEOUT_MS);
 
-    const remoteTip = parseLsRemoteMain(run("git", ["ls-remote", "origin", "refs/heads/main"]));
-    if (!remoteTip || !shasEqual(remoteTip, localMain)) {
-      throw new Error(
-        `push did not land: origin/main (${remoteTip || "<unparsable>"}) != pushed tip (${localMain})`
+      const remoteTip = parseLsRemoteMain(run("git", ["ls-remote", "origin", "refs/heads/main"]));
+      let pushedTip = localMain;
+      if (!remoteTip || !shasEqual(remoteTip, localMain)) {
+        // SUBC-058: a landing may have joined local main between the
+        // rev-parse above and the push, so ls-remote can disagree with the
+        // measured tip. Absorb the narrow race: re-read local main ONCE and
+        // continue the attempt with the fresher tip when ls-remote equals it
+        // (never a force; the refspec is unchanged). Any other mismatch
+        // throws the unchanged error.
+        const freshTip = run("git", ["rev-parse", "main"]);
+        if (isFullSha(remoteTip) && shasEqual(remoteTip, freshTip)) {
+          pushedTip = freshTip;
+          say(
+            `${SCRIPT}: landing joined local main mid-push (SUBC-058): origin/main is at ` +
+              `${remoteTip}, the fresher local main tip; continuing with the pushed tip ${pushedTip}`
+          );
+        } else {
+          throw new Error(
+            `push did not land: origin/main (${remoteTip || "<unparsable>"}) != pushed tip (${localMain})`
+          );
+        }
+      }
+      say(`${SCRIPT}: pushed; origin/main tip is now ${pushedTip}; polling for the Actions run on it`);
+
+      const matched = pollForRunOnTip(pushedTip, repo, Date.now() + POLL_BUDGET_MS);
+      say(
+        `${SCRIPT}: Actions run on tip: id=${matched.id} run_number=${matched.run_number} ` +
+          `event=${matched.event} conclusion=${matched.conclusion} url=${matched.html_url}`
       );
+
+      // Authoritative currency check (SUBC-007 artifact — consumed, never
+      // modified); shared with the SUBC-027 adoption path via runVerifyChain().
+      // SUBC-058: the OK pushed-and-green evidence line is emitted ONLY after
+      // this chain passes — pollForRunOnTip does not check the run's
+      // conclusion, so a pre-verify OK line could label a red run green.
+      try {
+        const lastLine = runVerifyChain();
+        say(`${SCRIPT}: verify-ci-currency: ${lastLine}`);
+      } catch (verifyErr) {
+        // Re-check ahead/behind once: when main is still strictly ahead-only,
+        // a concurrent landing joined mid-flush and the loop retries the push
+        // path (bounded by MAX_PUSH_ATTEMPTS); every other shape rethrows
+        // verifyErr unchanged into the outer catch.
+        run("git", ["fetch", "origin", "main"], GIT_TIMEOUT_MS);
+        const aheadNow = parseInt(run("git", ["rev-list", "--count", "origin/main..main"]), 10);
+        const behindNow = parseInt(run("git", ["rev-list", "--count", "main..origin/main"]), 10);
+        const retry = shouldLoopPushPath({
+          ahead: aheadNow,
+          behind: behindNow,
+          attempt,
+          maxAttempts: MAX_PUSH_ATTEMPTS,
+        });
+        if (!retry.retry) {
+          throw verifyErr;
+        }
+        say(
+          `${SCRIPT}: SUBC-058 mid-flush retry: ahead=${aheadNow} behind=${behindNow} — ` +
+            `${retry.reason}`
+        );
+        continue;
+      }
+
+      clearAlert();
+      say(`${SCRIPT}: OK main pushed and green (tip ${pushedTip}, run id=${matched.id})`);
+      return 0;
     }
-    say(`${SCRIPT}: pushed; origin/main tip is now ${remoteTip}; polling for the Actions run on it`);
-
-    const matched = pollForRunOnTip(remoteTip, repo, Date.now() + POLL_BUDGET_MS);
-    say(
-      `${SCRIPT}: Actions run on tip: id=${matched.id} run_number=${matched.run_number} ` +
-        `event=${matched.event} conclusion=${matched.conclusion} url=${matched.html_url}`
+    // Statically unreachable: every iteration either returns 0 after a
+    // passing verify chain or throws (verify failure with a non-retryable
+    // shape, push-not-landed, poll timeout). Fail-safe against future edits
+    // that break that invariant — the gate must never exit silently.
+    throw new Error(
+      `push retry loop exhausted MAX_PUSH_ATTEMPTS=${MAX_PUSH_ATTEMPTS} attempts without ` +
+        `returning a verdict (unreachable fail-safe); re-run the gate`
     );
-
-    // Authoritative currency check (SUBC-007 artifact — consumed, never
-    // modified); shared with the SUBC-027 adoption path via runVerifyChain().
-    const lastLine = runVerifyChain();
-    say(`${SCRIPT}: verify-ci-currency: ${lastLine}`);
-
-    clearAlert();
-    say(`${SCRIPT}: OK main pushed and green (tip ${remoteTip}, run id=${matched.id})`);
-    return 0;
   } catch (err) {
     const msg = failMsg(err);
     const alert =

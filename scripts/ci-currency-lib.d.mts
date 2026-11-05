@@ -19,6 +19,26 @@ export declare type DecideResult = {
 /** Decide what to do given ahead/behind counts between local main and origin/main. */
 export declare function decideAction(ahead: number, behind: number): DecideResult;
 
+export declare type PushRetryDecision = {
+  retry: boolean;
+  reason: string;
+};
+
+/**
+ * Should the landing gate loop its push path once more (SUBC-058)? True only
+ * for the strictly-ahead-only mid-flush shape (behind === 0, ahead > 0)
+ * while the attempt bound is not yet reached; every other shape returns
+ * false with a reason naming why (behind/diverged, currency holds, bound
+ * exhausted) so the gate rethrows into its alert path. Throws for invalid
+ * counts (decideAction's exact wording) and non-integer/<1 attempt bounds.
+ */
+export declare function shouldLoopPushPath(inputs: {
+  ahead: number;
+  behind: number;
+  attempt: number;
+  maxAttempts: number;
+}): PushRetryDecision;
+
 /** Extract the sha of `refs/heads/main` from `git ls-remote` output; null when absent. */
 export declare function parseLsRemoteMain(output: string): string | null;
 

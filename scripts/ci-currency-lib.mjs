@@ -85,6 +85,94 @@ export function decideAction(ahead, behind) {
 }
 
 /**
+ * Should the landing gate loop its push path once more? The SUBC-058
+ * mid-flush retry decision. Observed live on SUBC-052: the gate pushed tip
+ * 906c1711, its Actions run completed with conclusion=success, and a
+ * concurrent engine landing (f961eb0) joined local main during the ~95 s
+ * poll — the post-push verify then failed ("local main NOT fully pushed")
+ * and the old gate gave up with an alert + exit 1 even though the push had
+ * already landed and gone green.
+ *
+ * When the freshly re-measured counts are STILL strictly ahead-only
+ * (behind === 0 && ahead > 0) and the loop bound is not yet reached, the
+ * state is exactly "a landing joined mid-flush" and re-running the push
+ * path absorbs it. Every other shape must rethrow into the gate's outer
+ * catch (alert + FAIL + exit 1):
+ *   - behind > 0 (behind-only or diverged) — not strictly ahead-only; the
+ *     next invocation's decideAction owns refuse shapes (and SUBC-045 owns
+ *     behind-only adoption); the retry loop never adopts mid-loop.
+ *   - ahead === 0 && behind === 0 — currency holds; the verify failure is
+ *     unrelated to the push and must stay loud.
+ *   - attempt >= maxAttempts — the bounded loop is exhausted; the remaining
+ *     ahead-only state surfaces through the alert path.
+ *
+ * Pure and zero-import: takes the counts the gate re-measured after a
+ * `git fetch` plus the attempt bookkeeping; no I/O, no clock.
+ *
+ * @param {{ ahead: number, behind: number, attempt: number, maxAttempts: number }} inputs
+ * @param {number} inputs.ahead commits on local main missing from origin/main, re-measured after the failed verify
+ * @param {number} inputs.behind commits on origin/main missing from local main, re-measured after the failed verify
+ * @param {number} inputs.attempt the 1-based push attempt that just failed its post-push verify
+ * @param {number} inputs.maxAttempts the loop bound (MAX_PUSH_ATTEMPTS in the gate script)
+ * @returns {{ retry: boolean, reason: string }}
+ */
+export function shouldLoopPushPath({ ahead, behind, attempt, maxAttempts }) {
+  if (!Number.isInteger(ahead) || ahead < 0) {
+    throw new Error(`invalid ahead count: ${String(ahead)} (must be a non-negative integer)`);
+  }
+  if (!Number.isInteger(behind) || behind < 0) {
+    throw new Error(`invalid behind count: ${String(behind)} (must be a non-negative integer)`);
+  }
+  if (!Number.isInteger(attempt) || attempt < 1) {
+    throw new Error(`invalid attempt: ${String(attempt)} (must be an integer >= 1)`);
+  }
+  if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
+    throw new Error(`invalid maxAttempts: ${String(maxAttempts)} (must be an integer >= 1)`);
+  }
+  if (behind !== 0) {
+    if (ahead > 0) {
+      return {
+        retry: false,
+        reason:
+          `local main DIVERGED from origin/main mid-loop (ahead ${ahead}, behind ${behind}): ` +
+          `not strictly ahead-only; refusing to auto-retry (no auto-merge, no force) — ` +
+          `the next invocation's decideAction owns refuse shapes`,
+      };
+    }
+    return {
+      retry: false,
+      reason:
+        `local main is BEHIND origin/main mid-loop (ahead 0, behind ${behind}): ` +
+        `not strictly ahead-only; refusing to auto-retry — ` +
+        `the next invocation's decideAction owns refuse shapes`,
+    };
+  }
+  if (ahead === 0) {
+    return {
+      retry: false,
+      reason:
+        `currency holds (ahead 0, behind 0): the verify failure is unrelated to the push; ` +
+        `not retrying — the failure must stay loud`,
+    };
+  }
+  if (attempt >= maxAttempts) {
+    return {
+      retry: false,
+      reason:
+        `push attempt ${attempt} of ${maxAttempts} failed its post-push verify with main ` +
+        `still ahead-only (${ahead} commit(s)): retry bound exhausted; not retrying`,
+    };
+  }
+  return {
+    retry: true,
+    reason:
+      `a concurrent landing joined local main mid-flush (ahead ${ahead}, behind ${behind}) ` +
+      `after push attempt ${attempt} of ${maxAttempts} failed its post-push verify: ` +
+      `re-checking and re-running the push path (next attempt ${attempt + 1} of ${maxAttempts})`,
+  };
+}
+
+/**
  * True only for a string of exactly 40 hexadecimal characters — a full
  * object id as printed by `git rev-parse` (uppercase accepted; comparisons
  * elsewhere stay case-insensitive). Owns the shape previously inlined in

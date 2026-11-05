@@ -188,6 +188,21 @@ trigger is now automated.
   push evidence naming the tip OR a proven descendant of it (ancestry proven
   via git merge-base --is-ancestor; SUBC-044), used for forensics on tips
   pushed outside the gate or passed by a later legitimate landing.
+- **Mid-flush retry (SUBC-058, 2026-11-05):** the gate absorbs concurrent
+  landings natively — when a second landing joins local `main` while the
+  gate is already polling CI for an earlier pushed tip (observed live on
+  SUBC-052: the earlier push was already green but the invocation exited 1
+  with a transient alert and needed a second gate run), the gate now
+  re-fetches, re-counts ahead/behind, and loops the push path while the
+  state stays strictly ahead-only, bounded at `MAX_PUSH_ATTEMPTS = 3` pushes
+  per invocation with the lock marker refreshed per attempt. The OK evidence
+  line is still emitted only after the verify chain passes; intermediate
+  tips of a multi-push invocation are auditable via descendant-tip evidence
+  (`--strict`, SUBC-044). Bound exhaustion or any behind/diverged re-check
+  still alerts (alert file + FAIL log line + exit 1) exactly as before; the
+  pure retry decision lives in `shouldLoopPushPath` in
+  `scripts/ci-currency-lib.mjs` (unit-tested in
+  `test/ci-currency-guard.test.ts`).
 - **Scheduled trigger (10-min tick) — one-time operator install.** The fusion
   user's crontab spool is not writable by agent identities on this host
   (verified 2026-11-03: `crontab -l` → `Permission denied`; no sudo; crond

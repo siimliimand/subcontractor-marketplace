@@ -153,6 +153,36 @@ describe("parseGateEvidenceLine", () => {
     expect(parsed.kind).toBe("fail");
     expect(parsed.ts).toBe("2026-11-04T12:00:00.000Z");
   });
+
+  it("classifies the SUBC-058 mid-flush retry narration as other (grammar non-collision)", () => {
+    // The retry narration carries the SUBC-058 marker, real counts, and even
+    // the word "push" — none of that may collide with the push-ok/noop-ok
+    // grammar: narration is deliberately non-evidence.
+    const line =
+      "2026-11-05T12:26:18.000Z push-main-when-ahead: SUBC-058 mid-flush retry: ahead=1 behind=0 — " +
+      "a concurrent landing joined local main mid-flush (ahead 1, behind 0) after push attempt 1 of 3 " +
+      "failed its post-push verify: re-checking and re-running the push path (next attempt 2 of 3)";
+    expect(parseGateEvidenceLine(line)).toEqual({
+      ts: null,
+      kind: "other",
+      tip: null,
+      runId: null,
+    });
+  });
+
+  it("classifies the SUBC-058 mid-push ls-remote absorb narration as other with all fields null", () => {
+    // The absorb narration names TWO full 40-hex shas (remote and pushed
+    // tip) — still never push-ok evidence: it does not prove a green run.
+    const line =
+      `2026-11-05T12:24:45.000Z push-main-when-ahead: landing joined local main mid-push (SUBC-058): ` +
+      `origin/main is at ${TIP_504}, the fresher local main tip; continuing with the pushed tip ${TIP_9A7}`;
+    expect(parseGateEvidenceLine(line)).toEqual({
+      ts: null,
+      kind: "other",
+      tip: null,
+      runId: null,
+    });
+  });
 });
 
 describe("findLandingEvidence", () => {
@@ -371,6 +401,66 @@ describe("findLandingEvidence", () => {
     expect(result.found).toBe(true);
     expect(result.matchKind).toBe("descendant-tip");
     expect(result.evidence?.tip).toBe(TIP_9A7); // newest acceptable line returned first
+  });
+
+  it("resolves a SUBC-058 loop-shaped log: final tip exact, intermediate tip descendant (no OK for it)", () => {
+    // The SUBC-058 mid-flush retry log shape (modeled on the live SUBC-052
+    // race): the gate pushed TIP_504, its post-push verify failed because a
+    // concurrent landing joined mid-flush (narration lines only — NO push-ok
+    // line for TIP_504), then the loop re-pushed TIP_9A7 which went green
+    // and earned the invocation's single OK line. The final tip must audit
+    // exact-tip; the intermediate tip must audit descendant-tip through the
+    // injected predicate — the precise mechanism that covered the real
+    // SUBC-052 pushed tip 906c1711 via its landed recovery dfa517f.
+    const loopNarration = (ts: string, attempt: number): string =>
+      `${ts} push-main-when-ahead: SUBC-058 mid-flush retry: ahead=1 behind=0 — ` +
+      `a concurrent landing joined local main mid-flush (ahead 1, behind 0) after push ` +
+      `attempt ${attempt} of 3 failed its post-push verify: re-checking and re-running ` +
+      `the push path (next attempt ${attempt + 1} of 3)`;
+    const lines = [
+      `2026-11-05T12:24:40.627Z push-main-when-ahead: ahead=1 behind=0 → push (local main is ahead by 1 commit(s); pushing to origin/main)`,
+      `2026-11-05T12:24:42.001Z push-main-when-ahead: pushing main (${TIP_504}) to origin/main (single hardcoded refspec, no --force)`,
+      `2026-11-05T12:24:44.000Z push-main-when-ahead: pushed; origin/main tip is now ${TIP_504}; polling for the Actions run on it`,
+      `2026-11-05T12:26:17.293Z push-main-when-ahead: tip ${TIP_504} found on poll #7: run id=42026894548`,
+      loopNarration("2026-11-05T12:26:18.000Z", 1),
+      `2026-11-05T12:28:28.352Z push-main-when-ahead: pushing main (${TIP_9A7}) to origin/main (single hardcoded refspec, no --force)`,
+      `2026-11-05T12:28:30.000Z push-main-when-ahead: pushed; origin/main tip is now ${TIP_9A7}; polling for the Actions run on it`,
+      pushOk9A7("2026-11-05T12:29:51.544Z"),
+    ];
+
+    // Final tip: strict audit resolves exact-tip on the loop's OK line.
+    const finalAudit = findLandingEvidence(lines, TIP_9A7, {
+      committedAtIso: null,
+      allowNoopFallback: false,
+    });
+    expect(finalAudit.found).toBe(true);
+    expect(finalAudit.matchKind).toBe("exact-tip");
+    expect(finalAudit.evidence?.tip).toBe(TIP_9A7);
+    expect(finalAudit.evidence?.runId).toBe("41907815753");
+    expect(finalAudit.evidence?.ts).toBe("2026-11-05T12:29:51.544Z");
+
+    // Intermediate tip: strict audit with ancestry resolves descendant-tip
+    // against the SAME log — no push-ok line ever named TIP_504.
+    const intermediateAudit = findLandingEvidence(lines, TIP_504, {
+      committedAtIso: null,
+      allowNoopFallback: false,
+      isTipDescendant: (auditedTip, pushedTip) =>
+        auditedTip === TIP_504 && pushedTip === TIP_9A7,
+    });
+    expect(intermediateAudit.found).toBe(true);
+    expect(intermediateAudit.matchKind).toBe("descendant-tip");
+    expect(intermediateAudit.evidence?.tip).toBe(TIP_9A7);
+    expect(intermediateAudit.reason).toContain(TIP_504);
+
+    // Without the predicate the intermediate tip stays unresolved (strict):
+    // narration lines never substitute for tip-named evidence.
+    const noPredicateAudit = findLandingEvidence(lines, TIP_504, {
+      committedAtIso: null,
+      allowNoopFallback: false,
+    });
+    expect(noPredicateAudit.found).toBe(false);
+    expect(noPredicateAudit.matchKind).toBeNull();
+    expect(noPredicateAudit.reason).toContain("none naming this tip");
   });
 
   it("default-mode shadowing pin: a qualifying newer noop-ok still shadows an older descendant push-ok", () => {

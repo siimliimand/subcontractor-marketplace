@@ -18,6 +18,7 @@ import {
   redactLogLine,
   refineRefusalWithTreeIdentity,
   shasEqual,
+  shouldLoopPushPath,
 } from "../scripts/ci-currency-lib.mjs";
 // Imported as TEXT only (?raw — same pattern as test/ci-alert-branch.test.ts
 // imports ci.yml): the orchestrator's module top level runs the gate, so a
@@ -95,6 +96,82 @@ describe("decideAction", () => {
     expect(() => decideAction(-1, 0)).toThrow(/invalid ahead count/);
     expect(() => decideAction(0, -2)).toThrow(/invalid behind count/);
     expect(() => decideAction(1.5, 0)).toThrow(/invalid ahead count/);
+  });
+});
+
+describe("shouldLoopPushPath", () => {
+  it("retries the exact observed SUBC-052 race shape {ahead:1, behind:0, attempt:1, maxAttempts:3}", () => {
+    // The live failure this helper exists for: tip 906c1711 was pushed and
+    // its Actions run completed green; landing f961eb0 joined local main
+    // during the ~95 s poll, the post-push verify then failed ("local main
+    // is NOT fully pushed"), and the old gate gave up with alert + exit 1.
+    // This exact input state must decide retry: true (the old behavior was
+    // give-up).
+    const result = shouldLoopPushPath({ ahead: 1, behind: 0, attempt: 1, maxAttempts: 3 });
+    expect(result.retry).toBe(true);
+    expect(result.reason).toMatch(/mid-flush/);
+    expect(result.reason).toMatch(/ahead 1, behind 0/);
+  });
+
+  it("retries on a later attempt while bound headroom remains", () => {
+    const result = shouldLoopPushPath({ ahead: 2, behind: 0, attempt: 2, maxAttempts: 3 });
+    expect(result.retry).toBe(true);
+    expect(result.reason).toMatch(/next attempt 3 of 3/);
+  });
+
+  it("stops at the bound: attempt === maxAttempts → false (retry bound exhausted)", () => {
+    const result = shouldLoopPushPath({ ahead: 1, behind: 0, attempt: 3, maxAttempts: 3 });
+    expect(result.retry).toBe(false);
+    expect(result.reason).toMatch(/retry bound exhausted/);
+    expect(result.reason).toMatch(/attempt 3 of 3/);
+  });
+
+  it("never retries behind-only (not strictly ahead-only)", () => {
+    const result = shouldLoopPushPath({ ahead: 0, behind: 2, attempt: 1, maxAttempts: 3 });
+    expect(result.retry).toBe(false);
+    expect(result.reason).toMatch(/BEHIND origin\/main mid-loop/);
+    expect(result.reason).toMatch(/not strictly ahead-only/);
+  });
+
+  it("never retries diverged (decideAction owns refuse shapes; never adopts mid-loop)", () => {
+    const result = shouldLoopPushPath({ ahead: 2, behind: 2, attempt: 1, maxAttempts: 3 });
+    expect(result.retry).toBe(false);
+    expect(result.reason).toMatch(/DIVERGED from origin\/main mid-loop/);
+    expect(result.reason).toMatch(/no auto-merge, no force/);
+  });
+
+  it("never retries when currency holds 0/0 (verify failed for an unrelated reason)", () => {
+    const result = shouldLoopPushPath({ ahead: 0, behind: 0, attempt: 1, maxAttempts: 3 });
+    expect(result.retry).toBe(false);
+    expect(result.reason).toMatch(/currency holds \(ahead 0, behind 0\)/);
+    expect(result.reason).toMatch(/unrelated to the push/);
+  });
+
+  it("throws for invalid ahead/behind counts with decideAction's exact wording", () => {
+    expect(() => shouldLoopPushPath({ ahead: -1, behind: 0, attempt: 1, maxAttempts: 3 })).toThrow(
+      /invalid ahead count/
+    );
+    expect(() => shouldLoopPushPath({ ahead: 1.5, behind: 0, attempt: 1, maxAttempts: 3 })).toThrow(
+      /invalid ahead count/
+    );
+    expect(() => shouldLoopPushPath({ ahead: 1, behind: -2, attempt: 1, maxAttempts: 3 })).toThrow(
+      /invalid behind count/
+    );
+  });
+
+  it("throws for invalid attempt/maxAttempts (non-integer or < 1)", () => {
+    expect(() => shouldLoopPushPath({ ahead: 1, behind: 0, attempt: 0, maxAttempts: 3 })).toThrow(
+      /invalid attempt/
+    );
+    expect(() => shouldLoopPushPath({ ahead: 1, behind: 0, attempt: 1.5, maxAttempts: 3 })).toThrow(
+      /invalid attempt/
+    );
+    expect(() => shouldLoopPushPath({ ahead: 1, behind: 0, attempt: 1, maxAttempts: 0 })).toThrow(
+      /invalid maxAttempts/
+    );
+    expect(() => shouldLoopPushPath({ ahead: 1, behind: 0, attempt: 1, maxAttempts: 2.5 })).toThrow(
+      /invalid maxAttempts/
+    );
   });
 });
 
@@ -394,5 +471,109 @@ describe("push-main-when-ahead.mjs adoption wiring (source-text pins)", () => {
     expect(gateSource).not.toContain("reset --hard");
     expect(gateSource).not.toContain('"pull"');
     expect(gateSource).not.toContain('"--force"');
+  });
+});
+
+describe("push-main-when-ahead.mjs SUBC-058 mid-flush retry wiring (source-text pins)", () => {
+  it("wraps the push path in the bounded for-loop with the MAX_PUSH_ATTEMPTS = 3 literal", () => {
+    // Invariant: the mid-flush retry is BOUNDED — a fixed small number of
+    // pushes per invocation, not an unbounded while-loop that could spin on
+    // a pathological landing cadence.
+    expect(gateSource).toContain("const MAX_PUSH_ATTEMPTS = 3;");
+    expect(gateSource).toContain(
+      "for (let attempt = 1; attempt <= MAX_PUSH_ATTEMPTS; attempt++)"
+    );
+  });
+
+  it("delegates the retry decision to the pure shouldLoopPushPath export (import + call site)", () => {
+    // Invariant: the loop/no-loop decision lives in the zero-import lib so
+    // it is honestly unit-testable under the workerd pool — the gate only
+    // measures and obeys.
+    expect(countOccurrences(gateSource, "shouldLoopPushPath")).toBeGreaterThanOrEqual(2);
+    expect(gateSource).toMatch(
+      /shouldLoopPushPath\(\{\s*\n\s*ahead: aheadNow,\s*\n\s*behind: behindNow,\s*\n\s*attempt,\s*\n\s*maxAttempts: MAX_PUSH_ATTEMPTS,\s*\n\s*\}\)/
+    );
+  });
+
+  it("the verify-failure catch performs the real re-check: fetch + both rev-list counts after the catch", () => {
+    // Invariant: the retry decision consumes FRESHLY RE-MEASURED counts (a
+    // real git fetch followed by both rev-list directions), not the counts
+    // from before the push — a stale measure would decide on pre-landing
+    // state.
+    const catchIdx = gateSource.indexOf("catch (verifyErr)");
+    expect(catchIdx).toBeGreaterThan(0);
+    const fetchIdx = gateSource.indexOf('"fetch", "origin", "main"', catchIdx);
+    expect(fetchIdx).toBeGreaterThan(catchIdx);
+    const aheadIdx = gateSource.indexOf('"rev-list", "--count", "origin/main..main"', fetchIdx);
+    const behindIdx = gateSource.indexOf('"rev-list", "--count", "main..origin/main"', aheadIdx);
+    expect(aheadIdx).toBeGreaterThan(fetchIdx);
+    expect(behindIdx).toBeGreaterThan(aheadIdx);
+  });
+
+  it("rethrows the verify error UNCHANGED for every non-retryable shape", () => {
+    // Invariant: behind-only, diverged, bound-exhausted, and currency-holds
+    // shapes must reach the outer catch exactly as today (alert + FAIL +
+    // exit 1) — the loop never swallows or rewrites the failure.
+    expect(gateSource).toMatch(/if \(!retry\.retry\) \{\s*\n\s*throw verifyErr;\s*\n\s*\}/);
+  });
+
+  it("emits the OK pushed-and-green line ONLY after the verify chain passes (bounded order)", () => {
+    // Invariant (grammar honesty): pollForRunOnTip does not check the run's
+    // conclusion, so an OK line emitted before the verify chain could label
+    // a red run green. The OK say must appear AFTER the push path's
+    // runVerifyChain() call, within a small source window (same try block).
+    const verifyIdx = gateSource.indexOf("const lastLine = runVerifyChain();");
+    expect(verifyIdx).toBeGreaterThan(0);
+    const okIdx = gateSource.indexOf(
+      "OK main pushed and green (tip ${pushedTip}, run id=${matched.id})",
+      verifyIdx
+    );
+    expect(okIdx).toBeGreaterThan(verifyIdx);
+    const between = gateSource.slice(verifyIdx, okIdx);
+    expect(between.length).toBeLessThan(2000); // bounded: same push-path block
+    expect(between).toContain("verify-ci-currency: ${lastLine}"); // chain result narrated first
+    expect(between).not.toContain("OK main pushed and green"); // never a pre-verify OK
+    expect(countOccurrences(gateSource, "OK main pushed and green")).toBe(1);
+  });
+
+  it("fails safe when the retry loop exhausts: throw after the loop names MAX_PUSH_ATTEMPTS", () => {
+    // Invariant: the gate must never exit silently — if a future edit breaks
+    // the return-or-throw invariant of each iteration, the fail-safe throw
+    // surfaces it through the alert path.
+    expect(gateSource).toContain(
+      "`push retry loop exhausted MAX_PUSH_ATTEMPTS=${MAX_PUSH_ATTEMPTS} attempts without `"
+    );
+  });
+
+  it("refreshLockMarker is defined and called per attempt, with utimesSync imported", () => {
+    // Invariant: a long multi-push loop (each attempt can poll CI for up to
+    // POLL_BUDGET_MS) must keep the lock marker fresh so isLockStale cannot
+    // steal it mid-flight; the refresh needs utimesSync on the node:fs
+    // import.
+    expect(gateSource).toContain("function refreshLockMarker()");
+    expect(countOccurrences(gateSource, "refreshLockMarker();")).toBe(1);
+    expect(gateSource).toMatch(/import \{[\s\S]*?utimesSync,[\s\S]*?\} from "node:fs";/);
+    expect(gateSource).toContain("utimesSync(LOCK_DIR");
+    expect(gateSource).toContain("writeFileSync(LOCK_PID_FILE, String(process.pid))");
+  });
+
+  it("narrates mid-flush retries with the SUBC-058 marker text and the re-measured counts", () => {
+    // Invariant: the narration line is SCRIPT-prefixed, names the SUBC-058
+    // marker, and carries the re-measured ahead/behind counts (classifies as
+    // "other" evidence — asserted in test/landing-gate-evidence.test.ts).
+    expect(gateSource).toContain(
+      "${SCRIPT}: SUBC-058 mid-flush retry: ahead=${aheadNow} behind=${behindNow}"
+    );
+  });
+
+  it("absorbs the ls-remote race with the fresher tip only on a proven full-sha match", () => {
+    // Invariant: the mid-push absorb path re-reads local main ONCE and
+    // continues only when ls-remote equals the fresher tip (full sha); any
+    // other mismatch keeps the unchanged push-did-not-land error.
+    expect(gateSource).toContain("const freshTip = run(\"git\", [\"rev-parse\", \"main\"]);");
+    expect(gateSource).toContain("isFullSha(remoteTip) && shasEqual(remoteTip, freshTip)");
+    expect(gateSource).toContain(
+      "`push did not land: origin/main (${remoteTip || \"<unparsable>\"}) != pushed tip (${localMain})`"
+    );
   });
 });
