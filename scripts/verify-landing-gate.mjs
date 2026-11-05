@@ -8,9 +8,14 @@
  * closes that gap: for a given landing tip it requires BOTH
  *
  *   (evidence leg)  a successful gate run recorded for that tip in
- *                   ~/.local/state/ci-currency/auto-push.log — either the
- *                   tip-named push-ok line ("OK main pushed and green (tip
- *                   <sha>, run id=<id>)") or, in default mode, a noop-ok
+ *                   ~/.local/state/ci-currency/auto-push.log — either a
+ *                   push-ok line naming the tip exactly ("OK main pushed and
+ *                   green (tip <sha>, run id=<id>)") or a push-ok line whose
+ *                   pushed tip provably descends from the audited tip
+ *                   (ancestry proven via git merge-base --is-ancestor with a
+ *                   git cat-file object guard; SUBC-044: a later legitimate
+ *                   gate push necessarily carried the audited commit to
+ *                   origin history) or, in default mode only, a noop-ok
  *                   line at/after the tip's commit time (the gate observed
  *                   currency already holding) — parsed by the unit-tested
  *                   pure logic in scripts/ci-currency-lib.mjs; and
@@ -30,7 +35,7 @@
  *
  * Usage:
  *   node scripts/verify-landing-gate.mjs                # audit current local main
- *   node scripts/verify-landing-gate.mjs --strict       # no noop-ok fallback
+ *   node scripts/verify-landing-gate.mjs --strict       # exact/descendant push evidence only
  *   node scripts/verify-landing-gate.mjs <sha>          # audit a historical tip
  *   node scripts/verify-landing-gate.mjs --strict <sha> # forensics on a tip
  *
@@ -48,7 +53,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { exit } from "node:process";
 import { fileURLToPath } from "node:url";
-import { findLandingEvidence, redactLogLine } from "./ci-currency-lib.mjs";
+import { findLandingEvidence, parseGateEvidenceLine, redactLogLine } from "./ci-currency-lib.mjs";
 
 const SCRIPT = "verify-landing-gate";
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -74,10 +79,12 @@ function usageExit(args) {
       `  node scripts/verify-landing-gate.mjs [--strict] [<full-or-short sha>]\n` +
       `    no sha    → audit the current local main tip\n` +
       `    <sha>     → audit that historical landing tip (resolved via git rev-parse)\n` +
-      `    --strict  → demand the tip-named push-ok evidence line (no noop-ok\n` +
+      `    --strict  → demand tip-named push evidence, exact or proven-descendant\n` +
+      `                (ancestry via git merge-base --is-ancestor; no noop-ok\n` +
       `                fallback); used for landing forensics\n` +
       `This checker is read-only: it never pushes, never takes the gate lock, and\n` +
-      `never writes auto-push.log or the alert file.`
+      `never writes auto-push.log or the alert file. Failed audits list the pushed\n` +
+      `tips found in the gate log and why each fails to prove the audited landing.`
   );
   exit(2);
 }
@@ -105,6 +112,100 @@ function lastNonEmptyLine(text) {
     .split("\n")
     .filter((l) => l.trim() !== "");
   return lines.length > 0 ? lines[lines.length - 1].trim() : "";
+}
+
+/**
+ * One-shot command runner that reports the exit status instead of throwing
+ * (unlike run()): the ancestry probes are EXPECTED to exit non-zero — git
+ * merge-base --is-ancestor exits 1 on "not an ancestor" and git cat-file -e
+ * exits non-zero on a missing object — so the caller interprets the status by
+ * exact exit code instead of treating every non-zero as an error. A null
+ * status means the child was killed (timeout) or never spawned.
+ */
+function probe(cmd, args, timeoutMs) {
+  try {
+    const stdout = execFileSync(cmd, args, {
+      encoding: "utf8",
+      timeout: timeoutMs,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    return { status: 0, stdout, stderr: "" };
+  } catch (err) {
+    return {
+      status: typeof (err && err.status) === "number" ? err.status : null,
+      stdout: String((err && err.stdout) ?? ""),
+      stderr: String((err && err.stderr) ?? "") || String((err && err.message) ?? ""),
+    };
+  }
+}
+
+/**
+ * Cached git-ancestry predicate injected into findLandingEvidence (SUBC-044).
+ *
+ * For a pushed tip named by a gate-log line, prove — or refuse to prove — that
+ * the audited tip is an ancestor of it:
+ *   1. object guard: `git cat-file -e <pushedTip>^{commit}` must exit 0; a
+ *      missing object is non-evaluable and NEVER proves ancestry (remediation:
+ *      `git fetch origin main`).
+ *   2. `git merge-base --is-ancestor <auditedTip> <pushedTip>` is interpreted
+ *      by exact exit code: 0 → proven descendant; 1 → evaluable, not an
+ *      ancestor; any other status (git error, timeout kill) → non-evaluable.
+ *
+ * Directionality is one-way: only "audited ancestor of pushed" can ever yield
+ * descends:true — a pushed tip OLDER than the audited tip is never accepted.
+ * Verdicts are cached per pushed tip so failure diagnostics never re-run git
+ * for a tip the scan already adjudicated.
+ */
+function makeAncestryPredicate(auditedTip) {
+  const cache = new Map();
+  const verdictFor = (pushedTip) => {
+    const key = typeof pushedTip === "string" ? pushedTip.trim().toLowerCase() : "";
+    if (!/^[0-9a-f]{40}$/.test(key)) {
+      return { descends: false, evaluable: false, detail: "pushed tip is not a full 40-hex sha" };
+    }
+    const hit = cache.get(key);
+    if (hit !== undefined) return hit;
+    let verdict;
+    const guard = probe("git", ["cat-file", "-e", `${key}^{commit}`], GIT_TIMEOUT_MS);
+    if (guard.status !== 0) {
+      const detail = lastNonEmptyLine(`${guard.stderr}\n${guard.stdout}`);
+      verdict = {
+        descends: false,
+        evaluable: false,
+        detail:
+          `ancestry not evaluable (pushed tip object missing locally` +
+          `${detail ? `: ${detail}` : ""}; fetch and retry: "git fetch origin main")`,
+      };
+    } else {
+      const res = probe("git", ["merge-base", "--is-ancestor", auditedTip, key], GIT_TIMEOUT_MS);
+      if (res.status === 0) {
+        verdict = {
+          descends: true,
+          evaluable: true,
+          detail: "audited tip is an ancestor of this pushed tip",
+        };
+      } else if (res.status === 1) {
+        verdict = { descends: false, evaluable: true, detail: "not an ancestor of the audited tip" };
+      } else {
+        const detail = lastNonEmptyLine(`${res.stderr}\n${res.stdout}`);
+        verdict = {
+          descends: false,
+          evaluable: false,
+          detail:
+            `ancestry not evaluable (git merge-base --is-ancestor exited ` +
+            `${res.status === null ? "without a status (timeout/kill)" : String(res.status)}` +
+            `${detail ? `: ${detail}` : ""})`,
+        };
+      }
+    }
+    cache.set(key, verdict);
+    return verdict;
+  };
+  // The lib accepts a push-ok line only when the predicate returns EXACTLY
+  // true; anything else (false, undefined) rejects the line — so a
+  // non-evaluable verdict can never silently enable descendant acceptance.
+  const predicate = (_auditedTip, pushedTip) => verdictFor(pushedTip).descends === true;
+  return { predicate, verdictFor };
 }
 
 function main() {
@@ -169,14 +270,46 @@ function main() {
   const logLines = logText
     .split("\n")
     .filter((l) => l.trim() !== ""); // drop the trailing-newline empty element
+  // SUBC-044: inject the cached git-ancestry predicate so descendant-tip
+  // push-ok evidence is adjudicated by the checker (all git I/O stays here;
+  // the lib remains pure). Both modes share the predicate — strict vs default
+  // differs only in the noop-ok fallback switch.
+  const { predicate, verdictFor } = makeAncestryPredicate(tip);
   const evidence = findLandingEvidence(logLines, tip, {
     committedAtIso,
     allowNoopFallback: !strict,
+    isTipDescendant: predicate,
   });
   if (!evidence.found) {
+    // Tip-mismatch diagnostics (SUBC-044): when the log names OTHER pushed
+    // tips, list each distinct one newest-first (cap 8) with its ancestry
+    // verdict so the failure says exactly why no line proves this landing.
+    // Verdicts reuse the same cache the scan populated — no git re-runs.
+    const pushedTips = [];
+    for (let i = logLines.length - 1; i >= 0 && pushedTips.length < 8; i--) {
+      const parsed = parseGateEvidenceLine(logLines[i]);
+      if (
+        parsed.kind === "push-ok" &&
+        parsed.tip !== null &&
+        parsed.tip !== tip &&
+        !pushedTips.includes(parsed.tip)
+      ) {
+        pushedTips.push(parsed.tip);
+      }
+    }
+    let diagnostics = "";
+    if (pushedTips.length > 0) {
+      const detailLines = pushedTips.map((pushedTip) => {
+        const verdict = verdictFor(pushedTip);
+        return `  pushed tip ${pushedTip}: ${verdict.detail}`;
+      });
+      diagnostics =
+        ` Tip-mismatch diagnostics (${String(pushedTips.length)} distinct pushed tip(s) in the ` +
+        `gate log, newest first):\n${detailLines.join("\n")}`;
+    }
     fail(
       `no landing-gate evidence for tip ${tip} (committed ${committedAtIso ?? "unknown"}): ` +
-        `${evidence.reason}. Remediation: run "node scripts/push-main-when-ahead.mjs" for ` +
+        `${evidence.reason}.${diagnostics} Remediation: run "node scripts/push-main-when-ahead.mjs" for ` +
         `this landing and require exit 0, then re-run this checker`
     );
   }
@@ -200,9 +333,18 @@ function main() {
   if (ev === null) {
     fail(`internal inconsistency: evidence reported found but no evidence object for ${tip}`);
   }
+  // Match clause (SUBC-044): name HOW the evidence matched; a descendant
+  // match also names the full pushed tip so the one-line receipt is
+  // self-contained proof for future audits.
+  const matchClause =
+    evidence.matchKind === null
+      ? ""
+      : evidence.matchKind === "descendant-tip" && ev.tip !== null
+        ? `, match descendant-tip via pushed tip ${ev.tip.slice(0, 12)} (${ev.tip})`
+        : `, match ${evidence.matchKind}`;
   say(
     `${SCRIPT}: OK — landing gate verified for tip ${tip.slice(0, 12)} (${tip}): ` +
-      `evidence ${ev.kind}${strict ? " (strict)" : ""}` +
+      `evidence ${ev.kind}${strict ? " (strict)" : ""}${matchClause}` +
       `${ev.runId ? `, run id=${ev.runId}` : ""}, evidence ts=${ev.ts ?? "unknown"}, ` +
       `committed ${committedAtIso ?? "unknown"}; currency: ${verifySummary}`
   );

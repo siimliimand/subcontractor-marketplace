@@ -279,6 +279,15 @@ export function isLockStale(ageMs, pidAlive) {
  * SUBC-020 diagnosed three landings skipped without a gate run; this grammar
  * is what makes that skip machine-detectable (consumed by
  * scripts/verify-landing-gate.mjs, the read-only landing checker).
+ *
+ * SUBC-044 extended the ACCEPTANCE rule without touching the grammar: a
+ * strict audit now also accepts a push-ok line whose pushed tip provably
+ * descends from the audited tip (a later legitimate gate push necessarily
+ * carried the audited commit to origin history). The predicate proving
+ * ancestry is INJECTED (isTipDescendant in findLandingEvidence opts) so this
+ * pure lib stays zero-import; exact-tip matches keep precedence in the
+ * newest-first scan and every other rule (noop-ok fallback, strict-mode
+ * suppression) is unchanged.
  * ------------------------------------------------------------------------- */
 
 /** Leading `<ISO-8601> ` prefix as written by the watchdog's appendLog (Z only). */
@@ -338,32 +347,58 @@ export function parseGateEvidenceLine(line) {
 /**
  * Decide whether the watchdog log proves the landing gate ran for `tip`.
  *
- * Scans newest-first (the log is append-only and chronological). Strict mode
- * (allowNoopFallback === false) accepts ONLY a push-ok line whose tip equals
- * `tip` case-insensitively — the direct "the gate pushed exactly this commit
- * and watched CI go green" proof, used for forensics. Default mode
+ * Scans newest-first (the log is append-only and chronological); the newest
+ * acceptable evidence wins. Strict mode (allowNoopFallback === false)
+ * accepts ONLY a tip-named push-ok line — either whose tip EQUALS `tip`
+ * case-insensitively (matchKind "exact-tip") or whose pushed tip provably
+ * DESCENDS from `tip` when the injected isTipDescendant predicate returns
+ * true (matchKind "descendant-tip", SUBC-044: a later legitimate gate push
+ * necessarily carried the audited commit to origin history). Default mode
  * additionally accepts the newest noop-ok line whose timestamp parses at or
- * after the tip's committer time: a gate run that observed currency already
- * holding proves the tip was published (paired with the live currency check
- * the read-only verifier chains, this cannot mask an unpublished tip).
+ * after the tip's committer time (matchKind "noop-fallback"): a gate run
+ * that observed currency already holding proves the tip was published
+ * (paired with the live currency check the read-only verifier chains, this
+ * cannot mask an unpublished tip). Because the scan is newest-first and one
+ * acceptable line returns immediately, default-mode scan-order semantics are
+ * preserved: a qualifying newer noop-ok may shadow an OLDER descendant
+ * push-ok, exactly as it already could shadow an older exact push-ok.
  *
- * Returns `{ found, evidence, reason }`; `reason` is a diagnostic string in
- * EVERY case (named failure mode when not found, evidence summary when found)
- * so the checker can print exactly why a landing failed verification.
+ * Ancestry is only ever consulted when the parsed tip differs from the
+ * audited tip — exact equality is decided in the exact arm alone and never
+ * re-derived through the predicate. The predicate must explicitly return
+ * true to prove ancestry; false or a non-evaluable verdict (e.g. the pushed
+ * tip object is missing locally) rejects the line. A non-function
+ * isTipDescendant value throws immediately (fail-safe, mirroring
+ * refineRefusalWithTreeIdentity's evidence validation).
+ *
+ * Returns `{ found, evidence, reason, matchKind }`; `reason` is a diagnostic
+ * string in EVERY case (named failure mode when not found, evidence summary
+ * when found) so the checker can print exactly why a landing failed
+ * verification. `matchKind` names how the evidence matched: "exact-tip",
+ * "descendant-tip", "noop-fallback", or null when nothing was found.
  *
  * @param {string[]} lines log lines in chronological (oldest-first) order
  * @param {string} tip full 40-hex sha of the landing tip under audit
- * @param {{ committedAtIso: string | null, allowNoopFallback: boolean }} opts
- * @returns {{ found: boolean, evidence: ({ ts: string | null, kind: "push-ok" | "noop-ok" | "fail" | "check" | "other", tip: string | null, runId: string | null, line: string }) | null, reason: string }}
+ * @param {{ committedAtIso: string | null, allowNoopFallback: boolean, isTipDescendant?: (auditedTip: string, pushedTip: string) => boolean }} opts
+ * @returns {{ found: boolean, evidence: ({ ts: string | null, kind: "push-ok" | "noop-ok" | "fail" | "check" | "other", tip: string | null, runId: string | null, line: string }) | null, reason: string, matchKind: "exact-tip" | "descendant-tip" | "noop-fallback" | null }}
  */
 export function findLandingEvidence(lines, tip, opts) {
   const arr = Array.isArray(lines) ? lines : [];
   const optsSafe = opts ?? {};
   const tipNorm = typeof tip === "string" ? tip.trim().toLowerCase() : "";
+  const isTipDescendant = optsSafe.isTipDescendant;
+  if (isTipDescendant !== undefined && typeof isTipDescendant !== "function") {
+    throw new Error(
+      `invalid isTipDescendant evidence: ${String(isTipDescendant)} ` +
+        `(must be a function (auditedTip, pushedTip) => boolean — wrong-typed ` +
+        `evidence must never silently enable or disable descendant acceptance)`
+    );
+  }
   if (!/^[0-9a-f]{40}$/.test(tipNorm)) {
     return {
       found: false,
       evidence: null,
+      matchKind: null,
       reason: `invalid tip argument "${String(tip)}": expected a full 40-hex sha`,
     };
   }
@@ -371,6 +406,7 @@ export function findLandingEvidence(lines, tip, opts) {
     return {
       found: false,
       evidence: null,
+      matchKind: null,
       reason: "landing-gate log is empty: no lines to scan",
     };
   }
@@ -392,9 +428,26 @@ export function findLandingEvidence(lines, tip, opts) {
         return {
           found: true,
           evidence: { ...parsed, line: typeof rawLine === "string" ? rawLine : "" },
+          matchKind: "exact-tip",
           reason:
             `push-ok gate evidence names tip ${tipNorm} ` +
             `(run id=${parsed.runId ?? "?"}, evidence ts=${parsed.ts ?? "unknown"})`,
+        };
+      }
+      if (
+        typeof isTipDescendant === "function" &&
+        parsed.tip !== null &&
+        parsed.tip !== tipNorm &&
+        isTipDescendant(tipNorm, parsed.tip) === true
+      ) {
+        return {
+          found: true,
+          evidence: { ...parsed, line: typeof rawLine === "string" ? rawLine : "" },
+          matchKind: "descendant-tip",
+          reason:
+            `descendant-tip push-ok evidence names pushed tip ${parsed.tip} which descends ` +
+            `from audited tip ${tipNorm} (ancestry proven by the injected isTipDescendant ` +
+            `predicate; run id=${parsed.runId ?? "?"}, evidence ts=${parsed.ts ?? "unknown"})`,
         };
       }
       continue;
@@ -408,6 +461,7 @@ export function findLandingEvidence(lines, tip, opts) {
           return {
             found: true,
             evidence: { ...parsed, line: typeof rawLine === "string" ? rawLine : "" },
+            matchKind: "noop-fallback",
             reason:
               `noop-ok gate evidence at ${parsed.ts} is at/after the tip commit time ` +
               `${String(optsSafe.committedAtIso)}: the gate observed currency current on this tip`,
@@ -425,6 +479,7 @@ export function findLandingEvidence(lines, tip, opts) {
       return {
         found: false,
         evidence: null,
+        matchKind: null,
         reason:
           `only noop-ok evidence exists and its line lacks a parseable timestamp, ` +
           `so it cannot be shown to postdate the tip commit time ${String(optsSafe.committedAtIso)}`,
@@ -434,6 +489,7 @@ export function findLandingEvidence(lines, tip, opts) {
       return {
         found: false,
         evidence: null,
+        matchKind: null,
         reason:
           `only noop-ok evidence exists and the newest one (ts ${String(newestNoop.ts)}) ` +
           `predates the tip commit time ${String(optsSafe.committedAtIso)}: the gate has not ` +
@@ -450,6 +506,7 @@ export function findLandingEvidence(lines, tip, opts) {
   return {
     found: false,
     evidence: null,
+    matchKind: null,
     reason:
       `no gate success evidence for tip ${tipNorm}: scanned ${String(arr.length)} line(s) ` +
       `(${String(pushOkCount)} push-ok, ${String(noopOkCount)} noop-ok, rest non-evidence) ` +

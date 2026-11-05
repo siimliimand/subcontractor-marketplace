@@ -185,8 +185,9 @@ trigger is now automated.
   Enforcement: a landing whose task log lacks a passing checker run is NOT
   complete. Any task or audit can re-verify any past landing with
   `node scripts/verify-landing-gate.mjs <full-tip-sha>`; `--strict` demands
-  the tip-named push evidence (used for forensics on tips pushed outside the
-  gate).
+  push evidence naming the tip OR a proven descendant of it (ancestry proven
+  via git merge-base --is-ancestor; SUBC-044), used for forensics on tips
+  pushed outside the gate or passed by a later legitimate landing.
 - **Scheduled trigger (10-min tick) — one-time operator install.** The fusion
   user's crontab spool is not writable by agent identities on this host
   (verified 2026-11-03: `crontab -l` → `Permission denied`; no sudo; crond

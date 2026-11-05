@@ -962,3 +962,38 @@ Owner: founder (operator applies the runbook and records the AFTER counts; agent
 
 Owner: operator (upstream PR on Runfusion/Fusion); SUBC-039 owns the agents.md branch-hygiene promotion.
 
+
+## Strict landing evidence for ancestor tips — 2026-11-05 (SUBC-044)
+
+**Decision: `--strict` landing audits now accept push-ok evidence whose pushed tip PROVABLY DESCENDS from the audited tip (ancestry via `git merge-base --is-ancestor`, injected as a predicate so the pure lib stays zero-import), closing the SUBC-031 dead-end where a published landing later passed by another legitimate gate push could never receive a strict receipt.**
+
+Case that motivated it: SUBC-031's audit target `50433302f9926829ce4ebbc48871ed2391da0fd1` (the SUBC-026 landing) was published to origin only as an ancestor of gate-pushed tip `9a749b4461886aff0d2723aab97cfc5274a43be5` (SUBC-031's flush, Actions run #29 id 41907815753): no log line names 50433302, the pre-change strict checker exited 1 with "…none naming this tip (strict mode: only tip-named push-ok evidence counts)" (verbatim Step-0 capture: scanned 111 line(s), 10 push-ok, 6 noop-ok, rest non-evidence), and the audit had to be closed with a manual `git merge-base --is-ancestor` argument plus a documented rationale. A strict receipt is now issued in exactly that situation.
+
+New semantics (SUBC-028's evidence grammar is untouched — `parseGateEvidenceLine` and both verbatim success shapes are unchanged, and no new log shape becomes evidence):
+
+- `findLandingEvidence` gains an optional injected `isTipDescendant(auditedTip, pushedTip)` predicate; all git I/O stays in the checker (`scripts/verify-landing-gate.mjs` builds it from a `git cat-file -e <pushedTip>^{commit}` object guard plus `git merge-base --is-ancestor <audited> <pushed>` interpreted by exact exit code — 0 → proven, 1 → evaluable not-an-ancestor, anything else → non-evaluable), cached per pushed tip so failure diagnostics never re-run git. The lib remains zero-import and the checker strictly read-only.
+- Inside the newest-first scan, the push-ok arm returns exact-tip matches first (reason text byte-identical), then descendant-tip matches (`isTipDescendant(tipNorm, parsed.tip) === true` required — fail-safe). The newest acceptable line wins, so a NEWER descendant push-ok shadows an OLDER exact push-ok line (pinned by unit test) — exactly as a noop-ok could already shadow an older push-ok.
+- Both checker modes accept descendant evidence; strict mode still suppresses the noop-ok fallback; default-mode shadowing order is unchanged (pinned by unit test).
+- Results gain additive `matchKind`: "exact-tip" | "descendant-tip" | "noop-fallback" | null; the evidence object shape and the 0/1/2 exit-code contract are unchanged.
+- The checker's OK receipt names the match kind and, for descendant matches, the FULL pushed tip; failed audits append bounded tip-mismatch diagnostics (distinct pushed tips newest-first, cap 8) each with its verdict — "not an ancestor of the audited tip" or "ancestry not evaluable (object missing locally; fetch and retry)" — plus the kept remediation sentence.
+
+Safety argument: a gate push of a descendant tip necessarily carried the audited commit to origin history (the gate pushes fast-forward-only with a single hardcoded refspec and no --force), so proven descendant-push evidence is proof of publication, not a relaxation of it. Directionality is one-way (audited ancestor of pushed) — a pushed tip OLDER than the audited tip is never accepted (pinned); missing pushed-tip objects are non-evaluable and never pass silently; the predicate must return exactly true; a wrong-typed predicate throws (mirroring `refineRefusalWithTreeIdentity`'s fail-safe style). The chained live currency leg is consumed unchanged.
+
+Control flip (premise shift discovered during planning, confirmed live): the standing durable negative control `b23ddf418ef6d359561663301877ad3bb25c7623` (SUBC-018 tip-chain sha) IS an ancestor of gate-pushed tips, so under the new semantics it correctly GAINS a descendant receipt — it is retired as the durable negative by this entry (documentation-only retirement; the append-only log was not edited). The new durable negative is `7bfab347738c1d7dd59b4b97067bbdaf9633ae26` (the `rescue/subc-023-old-main` pin): not in main history, therefore an ancestor of no gate-pushed tip; its tree-identical twin `61f81e8` is what actually shipped, so no receipt is the correct answer for it. Backup negatives with the same verified property: `rescue/fusion-subc-006` (048acdcf2520d22f46cc67ff3504a8abe8199b54) and `rescue/fusion-subc-011` (d6f932f929a7707a87f39b0a1ab823e17251c291).
+
+Recorded control matrix (strict commands against the live host log; pre-change captured at Step 0 on the 111-line log, post-change after the convergence heal below; verbatim stdout in SUBC-044's task log and scratch captures):
+
+| # | Command | Pre-change | Post-change |
+|---|---|---|---|
+| 1 | `--strict f07eb930…` | exit 0, exact-tip (own push line, run id=41825457594) | exit 0, match descendant-tip via pushed tip 9df649f8e297 (run id=42013976106) |
+| 2 | `--strict bdba761…` | exit 0, exact-tip (newest pushed tip at planning) | exit 0, match descendant-tip via 9df649f8e297 |
+| 3 | `--strict 50433302…` | exit 1 — THE SYMPTOM ("none naming this tip (strict mode…)") | exit 0 — match descendant-tip via 9df649f8e297 (run id=42013976106): symptom gone |
+| 4 | `--strict b23ddf4…` | exit 1 (then believed durable negative) | exit 0, descendant-tip (documented flip → retired as negative) |
+| 5 | `--strict 7bfab34…` | exit 1 | exit 1 — now with tip-mismatch diagnostics naming 8 distinct pushed tips "not an ancestor of the audited tip" |
+| 6 | no-arg | exit 0 (healthy path) | exit 0, exact-tip on 9df649f8e297 |
+
+Receipt-shape drift vs the spec's predictions (premise-moved protocol): the matrix was anchored to planning-time log state (newest pushed tip bdba761; 42783f9 joined post-planning; the execution-time heal added 9df649f). Under the designed newest-acceptable-wins semantics, controls 1–4 report the newest descendant push (9df649f, run #34 id 42013976106) rather than each tip's own older exact line, and control 3 names 9df649f rather than 9a749b44 + run 41907815753; that fixture is pinned verbatim by the Step-1 unit test, and every exit code matches the spec contract.
+
+Convergence heal during execution: main was ahead-only by 3 unpublished landings (SUBC-042 `88a8639`, SUBC-036 `1b16be5`, SUBC-037 `9df649f`) when the control matrix came due; healed through the gate itself (single writer): `push-main-when-ahead.mjs` exit 0, pushed tip `9df649f8e297b969b3cd42a8db04e7ae95f5bb57`, Actions run #34 id 42013976106 success, chained currency OK, convergence 0/0 — the heal's own landing received the first live exact-tip receipt under the new receipt format.
+
+Own-landing transient (SUBC-028 precedent): an executor session cannot flush its own landing — the engine lands this task's branch after execution, so the gate run plus checker on the landed tip run at landing time (or the next ahead-only heal), and a post-landing re-run of `--strict 50433302…` must still exit 0: descendant evidence is additive and the task's own landing only adds newer push-ok lines to the log.

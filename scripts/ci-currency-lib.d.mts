@@ -48,20 +48,42 @@ export declare function parseGateEvidenceLine(line: string): GateEvidenceLine;
 
 export declare type LandingEvidence = GateEvidenceLine & { line: string };
 
+/**
+ * How the accepted evidence matched the audited tip (SUBC-044):
+ * "exact-tip" — a push-ok line naming the audited tip itself;
+ * "descendant-tip" — a push-ok line whose pushed tip provably descends from
+ * the audited tip (ancestry proven by the injected isTipDescendant predicate);
+ * "noop-fallback" — the noop-ok fallback in default mode;
+ * null — nothing was found.
+ */
+export declare type LandingEvidenceMatchKind =
+  | "exact-tip"
+  | "descendant-tip"
+  | "noop-fallback";
+
 export declare type FindLandingEvidenceResult = {
   found: boolean;
   evidence: LandingEvidence | null;
   reason: string;
+  matchKind: LandingEvidenceMatchKind | null;
 };
 
 /**
  * Decide whether the watchdog log proves the landing gate ran for `tip`
- * (newest-first scan; strict mode accepts only tip-named push-ok evidence).
+ * (newest-first scan; strict mode accepts tip-named push-ok evidence — exact
+ * or, when isTipDescendant is injected and returns true, a proven descendant
+ * tip). Default mode additionally accepts the noop-ok fallback.
  */
 export declare function findLandingEvidence(
   lines: string[],
   tip: string,
-  opts: { committedAtIso: string | null; allowNoopFallback: boolean }
+  opts: {
+    committedAtIso: string | null;
+    allowNoopFallback: boolean;
+    /** Prove `auditedTip` is an ancestor of `pushedTip` (SUBC-044). Must be
+     * a function when present; a wrong-typed value throws (fail-safe). */
+    isTipDescendant?: (auditedTip: string, pushedTip: string) => boolean;
+  }
 ): FindLandingEvidenceResult;
 
 export declare type RefineResult = {
