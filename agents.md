@@ -377,3 +377,39 @@ above; see also the decision-log entries “CI gate decision — 3 November
   has pushed main, a redundant push is a harmless no-op; never force-push
   to win a race, and never let local main fall behind origin (that trips
   the drift alert and blocks all landings).
+
+## Local task-branch hygiene (SUBC-026, promoted 2026-11-06)
+
+The durable policy from the decision-log entry
+"Local worktree and branch audit — 2026-11-04 (SUBC-026)" is binding for
+every agent, not only that audit. That entry remains the authoritative
+record (full classification table, retirement recipes, evidence); this
+section carries the binding clauses:
+
+1. **Closed-task branches: retire only after proof, always rescue-pinned.**
+   Delete a local `fusion/*` branch ONLY when BOTH the task store and the
+   `task.json` artifact confirm the owning task is closed/archived, and
+   ALWAYS after pinning a rescue tag (`rescue/<branch>` at the tip; rescue
+   tags are never pushed to origin). Run `git branch -d` first and record
+   its refusal when the tip is not an ancestor of main; `git branch -D` is
+   safe only after that zero-loss proof.
+2. **Open-task branches: never touched.** This includes paused-open tasks
+   awaiting operator decisions (precedent: `fusion/subc-009` stayed
+   untouched through its paused-open limbo and was retired only after the
+   2026-11-03 duplicate decision was acted on — rescue pin
+   `rescue/fusion-subc-009` at `5a47d3e`, then deletion — by the now-done
+   SUBC-038). The engine resets open-task branches onto current main at
+   pickup (proven live by the fusion/subc-026 reflog).
+3. **Out of scope:** `mission/*` refs and remote refs are outside
+   task-branch hygiene; origin never gains `fusion/*` refs (the landing
+   gate's `assertMainRef` and the single-writer contract above enforce
+   this). Cross-worktree mutations from a task sandbox are boundary-blocked
+   by design — another task's checked-out branch/worktree is retired only
+   via an operator handoff with exact commands (SUBC-026 action items).
+4. **Status:** engine-side auto-retirement (with automatic rescue pin) has
+   landed (SUBC-037, done) and now automates clause 1's mechanics on every
+   archive/delete path; manual retirement under this policy remains the
+   contract for cases outside the engine's automated paths (branches held
+   by live worktrees, operator-provenance branches, cross-worktree
+   handoffs).
+

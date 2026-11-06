@@ -1222,3 +1222,41 @@ Planning-time drift recorded: governance array ~:70 → :64; COORDINATION_EXEMPT
 Once the patched engine is deployed, the re-check recipe's step 3 (SUBC-053's step 2, "Active behavioral probe — exactly one disposable task") becomes: call `fn_task_create_probe` with the probe brief and a small `ttl_minutes`, then continue the recorded recipe unchanged (canonical branch at the current main tip, ancestry check, archive, log reads). The lane returns the probe's task id, landing column, expiry, and swept count, and the card is inert from birth — paused, workflow-less, never dispatched — so there is no scheduler residue to clean up; the expiry reaper archives the probe automatically at the next lane invocation if the recipe's own archive step does not run first. A fresh refusal of `fn_task_create_probe` at that point means not-yet-deployed: the disposition matrix stands unchanged and the session falls back to the recorded passive channels.
 
 Reversibility: this repo's exposure is exactly this entry (one commit); the engine patch is purely additive — no existing tool, list, export surface, or denial site changes behavior — and everything under `scratch.local/` is gitignored scratch. Owner: operator (upstream PR + deploy on Runfusion/Fusion); the deployed-behavior re-run belongs to SUBC-053 or any post-deploy session.
+
+## Local task-branch hygiene promoted into agents.md — 2026-11-06 (SUBC-039)
+
+**Decision: the durable branch-hygiene policy from the SUBC-026 audit
+("Local worktree and branch audit — 2026-11-04 (SUBC-026)") is promoted
+into `agents.md` as the section "Local task-branch hygiene (SUBC-026,
+promoted 2026-11-06)" — binding on every agent the same way the SUBC-025
+single-writer contract was promoted. The SUBC-026 entry remains the
+authoritative record; agents.md now carries the binding clauses: (1)
+closed/archived-task `fusion/*` branches are retired only after BOTH the
+task store and the `task.json` artifact confirm closure, always with a
+rescue pin first; (2) open-task branches — including paused-open tasks
+awaiting operator decisions — are never touched (the engine resets them
+onto current main at pickup); (3) `mission/*` refs and remote refs are out
+of scope, and cross-worktree mutations are boundary-blocked by design
+(operator handoff only).**
+
+Relationship to landed work: SUBC-037 (done) landed engine-side
+auto-retirement with an automatic rescue pin and automates clause 1's
+mechanics on every archive/delete path; the agents.md policy remains the
+manual contract for cases outside those automated paths. SUBC-038 (done)
+acted on the operator decision gating `fusion/subc-009`'s retirement under
+clause 2's paused-open exclusion (rescue pin `rescue/fusion-subc-009` at
+`5a47d3e`, then deletion); that disposition is the clause's live precedent.
+The SUBC-026 entry remains the authoritative record for classification
+detail and recipes.
+
+Evidence (2026-11-06, SUBC-039, worktree `subc-039`):
+
+| Check | Result | Implication |
+|---|---|---|
+| Source policy record present: `grep -n "Local worktree and branch audit"` (decision-log) | line 450 | the promoted policy's authoritative record exists |
+| Source policy text present: `grep -n "Durable policy established by this audit:"` | line 529 | the promoted clauses trace verbatim-in-substance to this paragraph |
+| Negative control pre-change: `grep -c "task-branch hygiene" agents.md` | `0` | the promotion is genuinely new; agents.md carried no branch-hygiene guidance |
+| Pure append to agents.md: `git diff --numstat` at Step 1 | `36 0` (commit `32b723b`) | no existing section was modified, rewritten, or reordered |
+| agents.md control matrix post-edit | heading count `1`; `rescue/<branch>` and `rescue/fusion-subc-009` phrases present; `paused-open` ×2; `mission/*` phrase present | binding clauses intact and unique |
+| Decision log append-only preservation | SUBC-026 heading still ×1 at line 450; new entry appended strictly at EOF (after the SUBC-056 entry, then last in file) | the authoritative record and all prior entries untouched |
+| Git currency: `git rev-list --left-right --count origin/main...main` | `0 1` (ahead-only, pending landing gate) | worktree based on current main; drift-response rule not triggered |
