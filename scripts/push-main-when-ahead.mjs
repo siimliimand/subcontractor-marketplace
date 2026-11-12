@@ -25,9 +25,15 @@
  *               refs/heads/main onto the origin tip with an explicit reflog
  *               message naming both tips and both trees → re-check
  *               convergence → chain scripts/verify-ci-currency.mjs
+ *   → ffadopt : SUBC-045 — behind-but-nothing-new (origin ahead, local main
+ *               has nothing of its own) → re-prove ancestry (git merge-base
+ *               --is-ancestor) → fast-forward refs/heads/main onto the
+ *               origin tip via CAS update-ref with an explicit reflog
+ *               message → re-check convergence → chain
+ *               scripts/verify-ci-currency.mjs
  *   → noop    : currency already holds, remove any stale alert
- *   → refuse  : behind, or diverged with differing trees → loud alert, never
- *               auto-merge/force-push
+ *   → refuse  : diverged with differing trees, or a contradicted/failed
+ *               probe → loud alert, never auto-merge/force-push
  *
  * Triggers (see agents.md, "Auto-push on landing"):
  *   - host cron tick every 10 minutes (fusion user)
@@ -49,12 +55,13 @@
  *
  * Guarantees: only the branch name `main` is ever pushed (assertMainRef +
  * hardcoded refspec); fusion/* worktree branches are NEVER pushed; no
- * --force anywhere; the SUBC-027 tree-identity adoption moves ONLY the local
- * refs/heads/main ref (compare-and-swap update-ref with an explicit reflog
- * message — never a push, merge, rebase, force, or worktree mutation) and
- * fires only when the empty-diff proof holds; every log/alert line passes
- * redactLogLine(); works from the primary checkout or any linked fusion
- * worktree (git shared refs).
+ * --force anywhere; the SUBC-027 tree-identity adoption and the SUBC-045
+ * behind-only fast-forward adoption move ONLY the local refs/heads/main ref
+ * (compare-and-swap update-ref with an explicit reflog message — never a
+ * push, merge, rebase, force, or worktree mutation) and fire only when their
+ * proof holds (empty diff / merge-base ancestry); every log/alert line
+ * passes redactLogLine(); works from the primary checkout or any linked
+ * fusion worktree (git shared refs).
  *
  * Requirements: Node >= 18, `git` and `gh` on PATH, gh authenticated.
  */
@@ -77,11 +84,13 @@ import {
   LOCK_STALE_MS,
   assertMainRef,
   buildAdoptionReflogMessage,
+  buildFastForwardReflogMessage,
   decideAction,
   isFullSha,
   isLockStale,
   parseLsRemoteMain,
   redactLogLine,
+  refineRefusalWithFastForward,
   refineRefusalWithTreeIdentity,
   shasEqual,
   shouldLoopPushPath,
@@ -179,6 +188,35 @@ function probeTreeIdentity(localTip, originTip) {
     const detail = failMsg(err);
     throw new Error(
       `tree-identity probe (git diff --quiet ${localTip} ${originTip}) failed${detail ? `: ${detail}` : ""}`
+    );
+  }
+}
+
+/**
+ * Probe whether the origin tip provably CONTAINS the local tip — the
+ * SUBC-045 fast-forward adoption evidence. Uses execFileSync directly (NOT
+ * the throwing `run` wrapper) because "already an ancestor" is exit code 1
+ * under --is-ancestor and is expected control flow, not an error:
+ * exit 0 → the origin tip descends from the local tip (strict
+ * fast-forward proven), exit 1 → it does not (the shape is contradictory
+ * and must refuse), any other failure → throw naming the probe (outer
+ * catch → alert → exit 1). Mirrors probeTreeIdentity's exit-status mapping.
+ */
+function probeAncestry(localTip, originTip) {
+  try {
+    execFileSync("git", ["merge-base", "--is-ancestor", localTip, originTip], {
+      encoding: "utf8",
+      timeout: GIT_TIMEOUT_MS,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    return { isAncestor: true };
+  } catch (err) {
+    if (err && err.status === 1) {
+      return { isAncestor: false };
+    }
+    const detail = failMsg(err);
+    throw new Error(
+      `ancestry probe (git merge-base --is-ancestor ${localTip} ${originTip}) failed${detail ? `: ${detail}` : ""}`
     );
   }
 }
@@ -320,28 +358,50 @@ function main() {
     const ahead = parseInt(run("git", ["rev-list", "--count", "origin/main..main"]), 10);
     const behind = parseInt(run("git", ["rev-list", "--count", "main..origin/main"]), 10);
     const decision = decideAction(ahead, behind);
-    // SUBC-027: a diverged refusal gets the same read-only refinement a gate
-    // run would apply, so the probe never lies about what a gate run would
-    // do. Read-only throughout: never mutates anything, never touches the
-    // alert file; a probe failure reports trees-unknown instead of crashing.
+    // SUBC-027/SUBC-045: a diverged OR behind-only refusal gets the same
+    // read-only refinement a gate run would apply, so the probe never lies
+    // about what a gate run would do. Read-only throughout: never mutates
+    // anything, never touches the alert file; a probe failure reports
+    // probes-unknown instead of crashing (either probe: tree identity for
+    // the diverged shape, merge-base ancestry for the behind-only shape).
     let refinement = "";
-    if (decision.action === "refuse" && ahead > 0 && behind > 0) {
+    if (
+      decision.action === "refuse" &&
+      ((ahead > 0 && behind > 0) || (ahead === 0 && behind > 0))
+    ) {
       try {
         const localTip = run("git", ["rev-parse", "main"]);
         const originTip = run("git", ["rev-parse", "origin/main"]);
         if (!isFullSha(localTip) || !isFullSha(originTip)) {
           throw new Error(`unparsable tip(s): main=${localTip} origin/main=${originTip}`);
         }
-        const probe = probeTreeIdentity(localTip, originTip);
-        const refined = refineRefusalWithTreeIdentity(ahead, behind, probe.identical);
-        refinement = ` | refinement: ${refined.reason}`;
-        if (refined.action === "adopt-origin") {
-          refinement +=
-            ` | a main-gate run (no --check) would adopt origin/main ${originTip} via ` +
-            `compare-and-swap update-ref and exit 0 if the tip's CI run is green`;
+        if (ahead > 0 && behind > 0) {
+          const probe = probeTreeIdentity(localTip, originTip);
+          const refined = refineRefusalWithTreeIdentity(ahead, behind, probe.identical);
+          refinement = ` | refinement: ${refined.reason}`;
+          if (refined.action === "adopt-origin") {
+            refinement +=
+              ` | a main-gate run (no --check) would adopt origin/main ${originTip} via ` +
+              `compare-and-swap update-ref and exit 0 if the tip's CI run is green`;
+          }
+        } else {
+          const probe = probeAncestry(localTip, originTip);
+          const refined = refineRefusalWithFastForward(ahead, behind);
+          refinement = ` | refinement: ${refined.reason}`;
+          if (refined.action === "ffadopt-origin" && probe.isAncestor) {
+            refinement +=
+              ` | a main-gate run (no --check) would fast-forward refs/heads/main onto ` +
+              `origin/main ${originTip} via compare-and-swap update-ref and exit 0 ` +
+              `if the tip's CI run is green`;
+          } else if (refined.action === "ffadopt-origin") {
+            refinement +=
+              ` | ancestry probe contradicts the behind-only counts (origin/main ${originTip} ` +
+              `is not a descendant of local main ${localTip}); a main-gate run would ` +
+              `refuse and alert`;
+          }
         }
       } catch (err) {
-        refinement = ` | trees-unknown (read-only probe failed: ${failMsg(err)})`;
+        refinement = ` | probes-unknown (read-only probe failed: ${failMsg(err)})`;
       }
     }
     say(
@@ -429,6 +489,65 @@ function main() {
           clearAlert();
           say(
             `${SCRIPT}: OK adopted origin/main tip ${originTip} (tree-identical diverged local main healed)`
+          );
+          return 0;
+        }
+      } else if (ahead === 0 && behind > 0) {
+        // SUBC-045: a behind-only refusal is provably harmless — ahead = 0
+        // proves the origin tip already CONTAINS the local tip, so healing
+        // is a strict fast-forward of the local ref onto the origin tip
+        // (sibling of the tree-identity refinement above; decideAction's
+        // contract stays unchanged — this converts only this shape).
+        const localTip = run("git", ["rev-parse", "main"]);
+        const originTip = run("git", ["rev-parse", "origin/main"]);
+        if (!isFullSha(localTip)) {
+          throw new Error(`unparsable local main tip: ${String(localTip)} (expected a full 40-hex sha)`);
+        }
+        if (!isFullSha(originTip)) {
+          throw new Error(`unparsable origin/main tip: ${String(originTip)} (expected a full 40-hex sha)`);
+        }
+        const refined = refineRefusalWithFastForward(ahead, behind);
+        say(`${SCRIPT}: fast-forward refinement: ${refined.reason}`);
+        effectiveReason = refined.reason;
+
+        if (refined.action === "ffadopt-origin") {
+          assertMainRef("main"); // defense-in-depth on top of the hardcoded refname below
+          const probe = probeAncestry(localTip, originTip);
+          if (probe.isAncestor !== true) {
+            // A false ancestry result contradicts the decision-time counts
+            // (behind-only implies containment) — refuse loudly instead of
+            // moving any ref on contradictory evidence.
+            throw new Error(
+              `fast-forward proof failed: origin/main ${originTip} is not a descendant of local main ${localTip} (counts were ahead=${ahead} behind=${behind} at decision time)`
+            );
+          }
+          const reflogMessage = buildFastForwardReflogMessage({ originTip, localTip });
+          say(
+            `${SCRIPT}: fast-forwarding local main ${localTip} onto behind-only origin/main ${originTip} ` +
+              `(compare-and-swap update-ref of refs/heads/main; reflog recorded; ` +
+              `no push, no merge, no worktree change)`
+          );
+          // Compare-and-swap: NEW value (originTip) BEFORE OLD value
+          // (localTip) — the EXACT argv literal order the tree-identity
+          // branch uses; the wiring test pins BOTH occurrences.
+          run("git", ["update-ref", "-m", reflogMessage, "refs/heads/main", originTip, localTip]);
+
+          const aheadNow = parseInt(run("git", ["rev-list", "--count", "origin/main..main"]), 10);
+          const behindNow = parseInt(run("git", ["rev-list", "--count", "main..origin/main"]), 10);
+          if (aheadNow !== 0 || behindNow !== 0) {
+            // A benign race (origin advanced past the captured tip, or a
+            // concurrent landing joined local main) leaves a healable state
+            // for the next tick — mirrored from the tree-identity branch.
+            throw new Error(
+              `post-adoption convergence failed: ahead=${aheadNow} behind=${behindNow} (expected 0/0)`
+            );
+          }
+          clearAlert();
+          const verifyLastLine = runVerifyChain();
+          say(`${SCRIPT}: verify-ci-currency: ${verifyLastLine}`);
+          clearAlert();
+          say(
+            `${SCRIPT}: OK fast-forwarded local main onto origin/main tip ${originTip} (behind-only local main healed)`
           );
           return 0;
         }

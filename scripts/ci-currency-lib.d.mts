@@ -54,7 +54,14 @@ export declare function shasEqual(a: string, b: string): boolean;
 /** Lock-steal decision: stale when the pid is dead or the lock is >= LOCK_STALE_MS old. */
 export declare function isLockStale(ageMs: number, pidAlive: boolean): boolean;
 
-export declare type GateEvidenceKind = "push-ok" | "noop-ok" | "fail" | "check" | "other";
+export declare type GateEvidenceKind =
+  | "push-ok"
+  | "adopt-ok"
+  | "ffadopt-ok"
+  | "noop-ok"
+  | "fail"
+  | "check"
+  | "other";
 
 export declare type GateEvidenceLine = {
   ts: string | null;
@@ -69,10 +76,12 @@ export declare function parseGateEvidenceLine(line: string): GateEvidenceLine;
 export declare type LandingEvidence = GateEvidenceLine & { line: string };
 
 /**
- * How the accepted evidence matched the audited tip (SUBC-044):
- * "exact-tip" — a push-ok line naming the audited tip itself;
+ * How the accepted evidence matched the audited tip (SUBC-044/SUBC-045):
+ * "exact-tip" — a push-ok, adopt-ok, or ffadopt-ok line naming the audited
+ * tip itself;
  * "descendant-tip" — a push-ok line whose pushed tip provably descends from
- * the audited tip (ancestry proven by the injected isTipDescendant predicate);
+ * the audited tip (ancestry proven by the injected isTipDescendant predicate;
+ * scoped to push-ok lines — adoption-family evidence is exact-tip only);
  * "noop-fallback" — the noop-ok fallback in default mode;
  * null — nothing was found.
  */
@@ -90,9 +99,10 @@ export declare type FindLandingEvidenceResult = {
 
 /**
  * Decide whether the watchdog log proves the landing gate ran for `tip`
- * (newest-first scan; strict mode accepts tip-named push-ok evidence — exact
- * or, when isTipDescendant is injected and returns true, a proven descendant
- * tip). Default mode additionally accepts the noop-ok fallback.
+ * (newest-first scan; strict mode accepts tip-named push-ok/adopt-ok/
+ * ffadopt-ok evidence — exact tip, and for push-ok lines only, a proven
+ * descendant tip when isTipDescendant is injected and returns true).
+ * Default mode additionally accepts the noop-ok fallback.
  */
 export declare function findLandingEvidence(
   lines: string[],
@@ -128,4 +138,27 @@ export declare function buildAdoptionReflogMessage(tips: {
   localTip: string;
   originTree: string;
   localTree: string;
+}): string;
+
+export declare type FastForwardRefineResult = {
+  action: "ffadopt-origin" | "refuse";
+  reason: string;
+};
+
+/**
+ * Refine a behind-only refusal with the strict fast-forward shape (SUBC-045):
+ * ahead === 0 && behind > 0 → ffadopt-origin (compare-and-swap update-ref of
+ * the local ref onto the origin tip; ahead = 0 is the containment proof);
+ * every other shape stays a refusal. Never returns push or noop. Throws for
+ * invalid counts with decideAction's exact wording.
+ */
+export declare function refineRefusalWithFastForward(
+  ahead: number,
+  behind: number
+): FastForwardRefineResult;
+
+/** Build the pinned reflog message for a behind-only fast-forward adoption (SUBC-045). */
+export declare function buildFastForwardReflogMessage(tips: {
+  originTip: string;
+  localTip: string;
 }): string;

@@ -11,11 +11,13 @@ import {
   LOCK_STALE_MS,
   assertMainRef,
   buildAdoptionReflogMessage,
+  buildFastForwardReflogMessage,
   decideAction,
   isFullSha,
   isLockStale,
   parseLsRemoteMain,
   redactLogLine,
+  refineRefusalWithFastForward,
   refineRefusalWithTreeIdentity,
   shasEqual,
   shouldLoopPushPath,
@@ -427,6 +429,82 @@ describe("buildAdoptionReflogMessage", () => {
   });
 });
 
+describe("refineRefusalWithFastForward", () => {
+  it("(0, 1) → ffadopt-origin — the minimal strict fast-forward shape", () => {
+    const result = refineRefusalWithFastForward(0, 1);
+    expect(result.action).toBe("ffadopt-origin");
+    expect(result.reason).toMatch(/BEHIND origin\/main by 1 commit\(s\) with nothing ahead/);
+    expect(result.reason).toMatch(/strict fast-forward shape/);
+    expect(result.reason).toMatch(/compare-and-swap update-ref/);
+    expect(result.reason).toMatch(/no push, no merge, no force, no content change/);
+    expect(result.reason).toMatch(/the origin tip already contains the local tip/);
+  });
+
+  it("(0, 7) → ffadopt-origin (behind count carried into the reason)", () => {
+    const result = refineRefusalWithFastForward(0, 7);
+    expect(result.action).toBe("ffadopt-origin");
+    expect(result.reason).toMatch(/BEHIND origin\/main by 7 commit\(s\)/);
+  });
+
+  it("(1, 3) → refuse (diverged belongs to the tree-identity refinement, never this one)", () => {
+    const result = refineRefusalWithFastForward(1, 3);
+    expect(result.action).toBe("refuse");
+    expect(result.reason).toMatch(
+      /applies only when local main is strictly behind origin\/main \(ahead equals zero\)/
+    );
+    expect(result.reason).toMatch(/ahead 1, behind 3/);
+  });
+
+  it("(1, 0) → refuse (ahead-only is the push path's shape — refinement never returns push)", () => {
+    const result = refineRefusalWithFastForward(1, 0);
+    expect(result.action).toBe("refuse");
+  });
+
+  it("(0, 0) → refuse (equal never ff-adopts — refinement never returns noop)", () => {
+    const result = refineRefusalWithFastForward(0, 0);
+    expect(result.action).toBe("refuse");
+  });
+
+  it("throws for invalid ahead counts with decideAction's exact wording", () => {
+    expect(() => refineRefusalWithFastForward(-1, 0)).toThrow(/invalid ahead count/);
+    expect(() => refineRefusalWithFastForward(1.5, 0)).toThrow(/invalid ahead count/);
+  });
+
+  it("throws for invalid behind counts with decideAction's exact wording", () => {
+    expect(() => refineRefusalWithFastForward(0, -2)).toThrow(/invalid behind count/);
+    expect(() => refineRefusalWithFastForward(0, 2.5)).toThrow(/invalid behind count/);
+  });
+});
+
+describe("buildFastForwardReflogMessage", () => {
+  const ORIGIN_TIP = "61f81e8a11111111111111111111111111111111";
+  const LOCAL_TIP = "7bfab34b22222222222222222222222222222222";
+
+  it("pins the exact reflog message format (both tips, strict fast-forward, SUBC-045 tag)", () => {
+    expect(buildFastForwardReflogMessage({ originTip: ORIGIN_TIP, localTip: LOCAL_TIP })).toBe(
+      `push-main-when-ahead: fast-forwarded refs/heads/main onto origin/main ${ORIGIN_TIP} ` +
+        `over behind-only local main ${LOCAL_TIP} (strict fast-forward, SUBC-045)`
+    );
+  });
+
+  it("is unchanged by redactLogLine (shas and fixed prose only — log-hygiene invariant)", () => {
+    const message = buildFastForwardReflogMessage({ originTip: ORIGIN_TIP, localTip: LOCAL_TIP });
+    expect(redactLogLine(message)).toBe(message);
+  });
+
+  it("throws on a 39-character sha, naming the offending field", () => {
+    expect(() =>
+      buildFastForwardReflogMessage({ originTip: ORIGIN_TIP.slice(0, 39), localTip: LOCAL_TIP })
+    ).toThrow(/originTip/);
+  });
+
+  it("throws on a refname like main where a sha belongs, naming the offending field", () => {
+    expect(() =>
+      buildFastForwardReflogMessage({ originTip: ORIGIN_TIP, localTip: "main" })
+    ).toThrow(/localTip/);
+  });
+});
+
 describe("push-main-when-ahead.mjs adoption wiring (source-text pins)", () => {
   it("pins the compare-and-swap argv order: new value (originTip) BEFORE old value (localTip)", () => {
     // Invariant: git update-ref takes <new-value> <old-value>. Swapping the
@@ -460,8 +538,11 @@ describe("push-main-when-ahead.mjs adoption wiring (source-text pins)", () => {
   });
 
   it("the diverged gating ahead > 0 && behind > 0 appears in both the gate refuse branch and --check", () => {
-    // Invariant: adoption is scoped to the diverged shape only — behind-only
-    // and ahead-only never reach the refinement, in either consumer.
+    // Invariant (SUBC-045 contract): the diverged shape (ahead > 0 &&
+    // behind > 0) is refined ONLY by the tree-identity refinement, and the
+    // behind-only shape (ahead === 0 && behind > 0) reaches the NEW
+    // fast-forward refinement — never the tree-identity one — in BOTH
+    // consumers (the main refuse branch AND the read-only --check probe).
     expect(countOccurrences(gateSource, "ahead > 0 && behind > 0")).toBeGreaterThanOrEqual(2);
   });
 
@@ -575,5 +656,107 @@ describe("push-main-when-ahead.mjs SUBC-058 mid-flush retry wiring (source-text 
     expect(gateSource).toContain(
       "`push did not land: origin/main (${remoteTip || \"<unparsable>\"}) != pushed tip (${localMain})`"
     );
+  });
+});
+
+describe("push-main-when-ahead.mjs SUBC-045 fast-forward adoption wiring (source-text pins)", () => {
+  it("keeps the compare-and-swap argv order identical across BOTH adoption branches", () => {
+    // Invariant: the tree-identity branch (SUBC-027) and the fast-forward
+    // branch (SUBC-045) both move refs/heads/main via the SAME CAS argv
+    // literal — NEW value (originTip) BEFORE OLD value (localTip). Swapping
+    // the two silently reverts an already-adopted ref; pinning the count
+    // keeps the swapped-argv hazard fenced in both branches.
+    expect(
+      countOccurrences(
+        gateSource,
+        'update-ref", "-m", reflogMessage, "refs/heads/main", originTip, localTip'
+      )
+    ).toBeGreaterThanOrEqual(2);
+  });
+
+  it("both refusal consumers refine the behind-only shape (main refuse branch + --check probe)", () => {
+    // Invariant: the behind-only gating must appear in BOTH consumers, the
+    // same way the diverged gating does — a main gate run heals it, and the
+    // read-only probe reports what a run would do.
+    expect(countOccurrences(gateSource, "ahead === 0 && behind > 0")).toBeGreaterThanOrEqual(2);
+  });
+
+  it("runs the ancestry probe with the merge-base --is-ancestor argv and the exit-1 not-ancestor mapping", () => {
+    // Invariant: `git merge-base --is-ancestor localTip originTip` exits 0
+    // when the origin tip contains the local tip and 1 when it does not —
+    // expected control flow, not an error — and the probe must keep mapping
+    // status === 1 to { isAncestor: false } instead of throwing (mirroring
+    // the tree-identity probe's exit-status mapping).
+    expect(gateSource).toMatch(/"merge-base", "--is-ancestor", localTip, originTip/);
+    expect(gateSource).toMatch(/status === 1/);
+  });
+
+  it("assertMainRef guards all THREE ref-moving paths (push, tree-identity adoption, fast-forward adoption)", () => {
+    // Invariant: every path that moves refs/heads/main re-asserts the
+    // main-only ref contract (defense-in-depth on top of hardcoded names) —
+    // the count rises 2 → 3 with the SUBC-045 fast-forward branch.
+    expect(countOccurrences(gateSource, "assertMainRef(")).toBeGreaterThanOrEqual(3);
+  });
+
+  it("the authoritative verify chain runs on all THREE healing/publishing paths", () => {
+    // Invariant: an ff-adopted tip must be proven green by
+    // verify-ci-currency exactly like a pushed or adopted tip — no self-heal
+    // may skip the currency check (definition + 3 call sites).
+    expect(countOccurrences(gateSource, "VERIFY_SCRIPT")).toBeGreaterThanOrEqual(2);
+    expect(countOccurrences(gateSource, "runVerifyChain()")).toBeGreaterThanOrEqual(3);
+  });
+
+  it("emits the OK fast-forwarded receipt ONLY after the verify chain passes (bounded order)", () => {
+    // Invariant (grammar honesty): the receipt line is emitted after the ff
+    // branch's own runVerifyChain() call and its narration — never before.
+    const okIdx = gateSource.indexOf("OK fast-forwarded local main onto origin/main tip");
+    expect(okIdx).toBeGreaterThan(0);
+    const verifyIdx = gateSource.lastIndexOf("const verifyLastLine = runVerifyChain();", okIdx);
+    expect(verifyIdx).toBeGreaterThan(0);
+    const between = gateSource.slice(verifyIdx, okIdx);
+    expect(between.length).toBeLessThan(1000); // bounded: same fast-forward branch
+    expect(between).toContain("verify-ci-currency: ${verifyLastLine}"); // chain result narrated first
+    expect(countOccurrences(gateSource, "OK fast-forwarded local main onto origin/main tip")).toBe(1);
+  });
+
+  it("refuses loudly on a contradicted ancestry proof or a post-adoption convergence mismatch", () => {
+    // Invariant: contradictory evidence (decision counts said behind-only,
+    // probe says the origin tip does not contain the local tip) must throw
+    // into the outer catch (alert + exit 1), never move a ref; a benign race
+    // (origin advanced past the captured tip) throws the mirrored
+    // convergence error and leaves a healable state for the next tick.
+    expect(gateSource).toContain(
+      "`fast-forward proof failed: origin/main ${originTip} is not a descendant of local main ${localTip} (counts were ahead=${ahead} behind=${behind} at decision time)`"
+    );
+    expect(gateSource).toContain(
+      "`post-adoption convergence failed: ahead=${aheadNow} behind=${behindNow} (expected 0/0)`"
+    );
+  });
+
+  it("the --check probe reports the would-be fast-forward and generalized probe failures without mutating anything", () => {
+    // Invariant: the read-only probe appends what a main-gate run would do
+    // (the same class of line the tree-identity refinement appends), and a
+    // failing probe reports probes-unknown (either probe) instead of
+    // crashing. The --check path never mutates refs, the alert file, or the
+    // reflog (asserted structurally: no update-ref inside the check block is
+    // covered by the CAS-count pin — the check block cannot reach one).
+    expect(gateSource).toContain(
+      "a main-gate run (no --check) would fast-forward refs/heads/main onto "
+    );
+    expect(gateSource).toContain("probes-unknown (read-only probe failed:");
+    expect(gateSource).not.toContain("trees-unknown");
+  });
+
+  it("narrates the fast-forward with the pinned mechanics line (reflog recorded; no push, no merge, no worktree change)", () => {
+    // Pinned per template line (the say() call is split across source lines,
+    // so the pieces are pinned individually — together they force the full
+    // narration text).
+    expect(gateSource).toContain(
+      "fast-forwarding local main ${localTip} onto behind-only origin/main ${originTip} "
+    );
+    expect(gateSource).toContain(
+      "(compare-and-swap update-ref of refs/heads/main; reflog recorded; "
+    );
+    expect(gateSource).toContain("no push, no merge, no worktree change)");
   });
 });

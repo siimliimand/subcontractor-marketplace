@@ -155,9 +155,13 @@ trigger is now automated.
   pushed tip → chain `scripts/verify-ci-currency.mjs`**; **diverged but
   tree-identical (empty-diff proof) → adopt the origin tip locally via
   compare-and-swap `update-ref` with an explicit reflog message, then verify
-  (SUBC-027)**; **every other behind/diverged state → refuse loudly, never
-  auto-merge, never force**. Pure decision logic — including the SUBC-027
-  tree-identity adoption refinement — lives in
+  (SUBC-027)**; **behind with nothing new (ahead = 0) → re-prove ancestry
+  (`git merge-base --is-ancestor`), fast-forward `refs/heads/main` onto the
+  origin tip via compare-and-swap `update-ref` with an explicit reflog
+  message, then verify (SUBC-045)**; **every other behind/diverged state →
+  refuse loudly, never auto-merge, never force**. Pure decision logic —
+  including BOTH adoption refinements (tree identity, SUBC-027; strict
+  fast-forward, SUBC-045) — lives in
   `scripts/ci-currency-lib.mjs` (unit-tested in
   `test/ci-currency-guard.test.ts`).
 - **Why not a merger-path hook or a git hook:** the Fusion engine's merge flow
@@ -271,10 +275,14 @@ trigger is now automated.
   refspec + `assertMainRef`; unknown argv refused); `fusion/*` task branches
   are NEVER pushed; never `--force`; every log/alert line is scrubbed of
   `ghp_`/`gho_`/`github_pat_`/`x-access-token:` material before it is written;
-  no credential material in commits. The SUBC-027 tree-identity adoption
-  moves only the local `refs/heads/main` ref (never a push, merge, rebase, or
-  worktree mutation), fires only when `git diff` proves the tips' trees
-  identical, and records both tips and trees in the reflog message. The
+  no credential material in commits. Both adoption-family paths move only the
+  local `refs/heads/main` ref (never a push, merge, rebase, or worktree
+  mutation), fire only after their proof holds (SUBC-027: `git diff` proves
+  the tips' trees identical; SUBC-045: `git merge-base --is-ancestor` proves
+  the origin tip contains the behind-only local tip), record both tips (plus
+  trees for SUBC-027) in pinned reflog messages, and both of their OK
+  receipts are recognized tip-named landing evidence for the strict landing
+  checker (SUBC-045 grammar extension). The
   script works from the primary checkout or any linked fusion worktree (git
   shared refs).
 - **Single-writer landing contract (added by SUBC-025, 2026-11-05; see

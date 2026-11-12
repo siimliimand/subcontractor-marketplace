@@ -14,12 +14,16 @@
  * Guarantees encoded here:
  *   - ONLY the branch name `main` is ever a valid ref to operate on
  *     (`fusion/*` task branches are never pushed).
- *   - Never push when behind or diverged (no auto-merge, no force). The one
- *     provably harmless divergence — diverged tips with IDENTICAL trees —
- *     may instead be healed by ADOPTING the origin tip locally
- *     (refineRefusalWithTreeIdentity + buildAdoptionReflogMessage, SUBC-027:
- *     a compare-and-swap update-ref of refs/heads/main only — still never a
- *     push, merge, or force).
+ *   - Never push when behind or diverged (no auto-merge, no force). The two
+ *     provably harmless non-current shapes are healed instead, each with its
+ *     own proof, both via a compare-and-swap update-ref of refs/heads/main
+ *     only — still never a push, merge, or force:
+ *       - diverged tips with IDENTICAL trees → ADOPT the origin tip locally
+ *         (refineRefusalWithTreeIdentity + buildAdoptionReflogMessage,
+ *         SUBC-027);
+ *       - strictly-behind local main with nothing ahead → FAST-FORWARD the
+ *         local ref onto the origin tip (refineRefusalWithFastForward +
+ *         buildFastForwardReflogMessage, SUBC-045).
  *   - Any string destined for a log or alert file is scrubbed of
  *     credential material before it is written.
  */
@@ -271,6 +275,53 @@ export function refineRefusalWithTreeIdentity(ahead, behind, treesIdentical) {
 }
 
 /**
+ * Refine a behind-only refusal (ahead === 0 && behind > 0) with the strict
+ * fast-forward shape — the SUBC-045 automation of the last remaining
+ * manual-repair shape the landing gate could not heal itself. When local
+ * main has NOTHING ahead of origin/main, the origin tip provably already
+ * CONTAINS the local tip (ahead = 0 is the containment proof), so healing
+ * is a strict fast-forward: the gate may move the LOCAL ref onto the origin
+ * tip via a compare-and-swap update-ref of refs/heads/main —
+ * content-neutral, local-ref-only, with the ancestry re-proven again at
+ * CAS time in the orchestrator.
+ *
+ * Never returns push or noop: the refinement only ever converts a
+ * behind-only refusal into ffadopt-origin, or leaves it a refusal. Diverged,
+ * ahead-only, and equal shapes stay refusals — fast-forward adoption is
+ * scoped to strictly-behind only (the diverged shape belongs to
+ * refineRefusalWithTreeIdentity; the two refinements are additive siblings
+ * and neither ever widens the other's scope).
+ *
+ * @param {number} ahead commits on local main missing from origin/main
+ * @param {number} behind commits on origin/main missing from local main
+ * @returns {{ action: "ffadopt-origin" | "refuse", reason: string }}
+ */
+export function refineRefusalWithFastForward(ahead, behind) {
+  if (!Number.isInteger(ahead) || ahead < 0) {
+    throw new Error(`invalid ahead count: ${String(ahead)} (must be a non-negative integer)`);
+  }
+  if (!Number.isInteger(behind) || behind < 0) {
+    throw new Error(`invalid behind count: ${String(behind)} (must be a non-negative integer)`);
+  }
+  if (ahead === 0 && behind > 0) {
+    return {
+      action: "ffadopt-origin",
+      reason:
+        `local main is BEHIND origin/main by ${behind} commit(s) with nothing ahead ` +
+        `(strict fast-forward shape): fast-forwarding refs/heads/main onto the origin tip ` +
+        `via compare-and-swap update-ref (no push, no merge, no force, no content change — ` +
+        `the origin tip already contains the local tip)`,
+    };
+  }
+  return {
+    action: "refuse",
+    reason:
+      `fast-forward adoption applies only when local main is strictly behind origin/main ` +
+      `(ahead equals zero); this shape (ahead ${ahead}, behind ${behind}) keeps the original decision`,
+  };
+}
+
+/**
  * Build the reflog message recorded by a tree-identity adoption (SUBC-027).
  * The format is pinned verbatim by a unit test: it is the audit record that
  * names both tips and both trees, and it deliberately carries only shas and
@@ -295,6 +346,32 @@ export function buildAdoptionReflogMessage({ originTip, localTip, originTree, lo
     `push-main-when-ahead: adopted origin/main ${originTip} over ` +
     `tree-identical diverged local main ${localTip} ` +
     `(tree ${originTree} == ${localTree}, SUBC-027)`
+  );
+}
+
+/**
+ * Build the reflog message recorded by a behind-only fast-forward adoption
+ * (SUBC-045). The format is pinned verbatim by a unit test: it is the audit
+ * record that names both tips and the shape proof, and it deliberately
+ * carries only shas and fixed prose — redactLogLine leaves it unchanged
+ * (mirroring the SUBC-027 log-hygiene pin).
+ *
+ * @param {{ originTip: string, localTip: string }} tips
+ * @returns {string}
+ */
+export function buildFastForwardReflogMessage({ originTip, localTip }) {
+  const fields = [
+    ["originTip", originTip],
+    ["localTip", localTip],
+  ];
+  for (const [field, value] of fields) {
+    if (!isFullSha(value)) {
+      throw new Error(`invalid ${field}: ${String(value)} (must be a full 40-hex sha)`);
+    }
+  }
+  return (
+    `push-main-when-ahead: fast-forwarded refs/heads/main onto origin/main ${originTip} ` +
+    `over behind-only local main ${localTip} (strict fast-forward, SUBC-045)`
   );
 }
 
@@ -356,11 +433,21 @@ export function isLockStale(ageMs, pidAlive) {
  *
  * The watchdog appends every run's outcome to
  * ~/.local/state/ci-currency/auto-push.log as `<ISO-8601 ts> <message>`.
- * Only two message shapes prove a gate SUCCESS, and they are pinned here
+ * Only these message shapes prove a gate SUCCESS, and they are pinned here
  * verbatim so a skipped landing can never pass verification:
  *
  *   push-main-when-ahead: OK main pushed and green (tip <40-hex>, run id <digits>)
+ *   push-main-when-ahead: OK adopted origin/main tip <40-hex> (tree-identical diverged local main healed)
+ *   push-main-when-ahead: OK fast-forwarded local main onto origin/main tip <40-hex> (behind-only local main healed)
  *   push-main-when-ahead: OK currency current (main == origin/main); nothing to push
+ *
+ * The adoption-family OK lines (SUBC-045) make both self-heal shapes
+ * machine-checkable landings: a gate run that healed main by adopting the
+ * origin tip — either via proven tree identity (SUBC-027) or via the
+ * strict fast-forward shape — leaves a recognized receipt exactly like a
+ * push does. (The SUBC-027 adopt line existed before this grammar was
+ * extended: SUBC-028's original two-shape grammar never classified it, so
+ * tree-identity adoptions could never earn a strict landing receipt.)
  *
  * Everything else the gate writes (FAIL lines, `--check` probe lines, and the
  * intermediate push/poll/verify narration) is deliberately non-evidence.
@@ -375,7 +462,10 @@ export function isLockStale(ageMs, pidAlive) {
  * ancestry is INJECTED (isTipDescendant in findLandingEvidence opts) so this
  * pure lib stays zero-import; exact-tip matches keep precedence in the
  * newest-first scan and every other rule (noop-ok fallback, strict-mode
- * suppression) is unchanged.
+ * suppression) is unchanged. SUBC-045 adds the two adoption-family kinds to
+ * the tip-named acceptance set with EXACT-tip matching only — the
+ * descendant predicate stays scoped to push-ok lines (an adoption naming a
+ * different tip carries no pushed-run ancestry story).
  * ------------------------------------------------------------------------- */
 
 /** Leading `<ISO-8601> ` prefix as written by the watchdog's appendLog (Z only). */
@@ -383,6 +473,20 @@ const GATE_LOG_TS_PREFIX_RE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3}
 /** Verbatim success line emitted after a push reached origin and CI went green. */
 const GATE_PUSH_OK_RE =
   /^push-main-when-ahead: OK main pushed and green \(tip ([0-9a-f]{40}), run id=(\d+)\)$/i;
+/**
+ * Verbatim success line emitted when a behind-only local main was healed by
+ * a strict fast-forward onto the origin tip (SUBC-045).
+ */
+const GATE_FFADOPT_OK_RE =
+  /^push-main-when-ahead: OK fast-forwarded local main onto origin\/main tip ([0-9a-f]{40}) \(behind-only local main healed\)$/i;
+/**
+ * Verbatim success line emitted when a tree-identical diverged local main
+ * was healed by adopting the origin tip (emitted by the gate since SUBC-027;
+ * recognized as landing evidence from SUBC-045 — the SUBC-028 grammar
+ * predates the line and never classified it).
+ */
+const GATE_ADOPT_OK_RE =
+  /^push-main-when-ahead: OK adopted origin\/main tip ([0-9a-f]{40}) \(tree-identical diverged local main healed\)$/i;
 /** Verbatim success line emitted when currency already held (nothing to push). */
 const GATE_NOOP_OK_PREFIX = "push-main-when-ahead: OK currency current";
 /** Failure lines start with this prefix followed by a space and the detail. */
@@ -402,13 +506,15 @@ function toEpochMs(iso) {
  *
  * Recognizes an optional leading ISO-8601 timestamp, then the gate's own
  * grammars: the tip-named push success (→ "push-ok", tip lowercased, run id
- * captured), the currency-current success (→ "noop-ok"), FAIL lines (→
- * "fail"), and `--check` probe lines (→ "check"). Any other line — including
- * the gate's intermediate push/poll/verify narration and malformed lookalikes
- * — classifies as "other" with ALL fields null.
+ * captured), the tip-named adoption successes (→ "adopt-ok" / "ffadopt-ok",
+ * tip lowercased, run id null — SUBC-045), the currency-current success (→
+ * "noop-ok"), FAIL lines (→ "fail"), and `--check` probe lines (→ "check").
+ * Any other line — including the gate's intermediate push/poll/verify
+ * narration and malformed lookalikes — classifies as "other" with ALL
+ * fields null.
  *
  * @param {string} line raw log line (timestamped or bare)
- * @returns {{ ts: string | null, kind: "push-ok" | "noop-ok" | "fail" | "check" | "other", tip: string | null, runId: string | null }}
+ * @returns {{ ts: string | null, kind: "push-ok" | "adopt-ok" | "ffadopt-ok" | "noop-ok" | "fail" | "check" | "other", tip: string | null, runId: string | null }}
  */
 export function parseGateEvidenceLine(line) {
   const raw = typeof line === "string" ? line : "";
@@ -419,6 +525,14 @@ export function parseGateEvidenceLine(line) {
   const pushOk = GATE_PUSH_OK_RE.exec(body);
   if (pushOk !== null) {
     return { ts, kind: "push-ok", tip: pushOk[1].toLowerCase(), runId: pushOk[2] };
+  }
+  const ffadoptOk = GATE_FFADOPT_OK_RE.exec(body);
+  if (ffadoptOk !== null) {
+    return { ts, kind: "ffadopt-ok", tip: ffadoptOk[1].toLowerCase(), runId: null };
+  }
+  const adoptOk = GATE_ADOPT_OK_RE.exec(body);
+  if (adoptOk !== null) {
+    return { ts, kind: "adopt-ok", tip: adoptOk[1].toLowerCase(), runId: null };
   }
   if (body.startsWith(GATE_NOOP_OK_PREFIX)) {
     return { ts, kind: "noop-ok", tip: null, runId: null };
@@ -437,19 +551,23 @@ export function parseGateEvidenceLine(line) {
  *
  * Scans newest-first (the log is append-only and chronological); the newest
  * acceptable evidence wins. Strict mode (allowNoopFallback === false)
- * accepts ONLY a tip-named push-ok line — either whose tip EQUALS `tip`
- * case-insensitively (matchKind "exact-tip") or whose pushed tip provably
- * DESCENDS from `tip` when the injected isTipDescendant predicate returns
- * true (matchKind "descendant-tip", SUBC-044: a later legitimate gate push
- * necessarily carried the audited commit to origin history). Default mode
- * additionally accepts the newest noop-ok line whose timestamp parses at or
- * after the tip's committer time (matchKind "noop-fallback"): a gate run
- * that observed currency already holding proves the tip was published
- * (paired with the live currency check the read-only verifier chains, this
- * cannot mask an unpublished tip). Because the scan is newest-first and one
- * acceptable line returns immediately, default-mode scan-order semantics are
- * preserved: a qualifying newer noop-ok may shadow an OLDER descendant
- * push-ok, exactly as it already could shadow an older exact push-ok.
+ * accepts ONLY tip-named push-ok/adopt-ok/ffadopt-ok evidence — a line whose
+ * tip EQUALS `tip` case-insensitively (matchKind "exact-tip") and, for
+ * push-ok lines alone, one whose pushed tip provably DESCENDS from `tip`
+ * when the injected isTipDescendant predicate returns true (matchKind
+ * "descendant-tip", SUBC-044: a later legitimate gate push necessarily
+ * carried the audited commit to origin history). Adoption-family evidence
+ * is exact-tip only by design (SUBC-045): an adoption naming a different
+ * tip carries no pushed-run ancestry story, so it can never stand in for
+ * another tip. Default mode additionally accepts the newest noop-ok line
+ * whose timestamp parses at or after the tip's committer time (matchKind
+ * "noop-fallback"): a gate run that observed currency already holding
+ * proves the tip was published (paired with the live currency check the
+ * read-only verifier chains, this cannot mask an unpublished tip). Because
+ * the scan is newest-first and one acceptable line returns immediately,
+ * default-mode scan-order semantics are preserved: a qualifying newer
+ * noop-ok may shadow an OLDER descendant push-ok, exactly as it already
+ * could shadow an older exact push-ok.
  *
  * Ancestry is only ever consulted when the parsed tip differs from the
  * audited tip — exact equality is decided in the exact arm alone and never
@@ -468,7 +586,7 @@ export function parseGateEvidenceLine(line) {
  * @param {string[]} lines log lines in chronological (oldest-first) order
  * @param {string} tip full 40-hex sha of the landing tip under audit
  * @param {{ committedAtIso: string | null, allowNoopFallback: boolean, isTipDescendant?: (auditedTip: string, pushedTip: string) => boolean }} opts
- * @returns {{ found: boolean, evidence: ({ ts: string | null, kind: "push-ok" | "noop-ok" | "fail" | "check" | "other", tip: string | null, runId: string | null, line: string }) | null, reason: string, matchKind: "exact-tip" | "descendant-tip" | "noop-fallback" | null }}
+ * @returns {{ found: boolean, evidence: ({ ts: string | null, kind: "push-ok" | "adopt-ok" | "ffadopt-ok" | "noop-ok" | "fail" | "check" | "other", tip: string | null, runId: string | null, line: string }) | null, reason: string, matchKind: "exact-tip" | "descendant-tip" | "noop-fallback" | null }}
  */
 export function findLandingEvidence(lines, tip, opts) {
   const arr = Array.isArray(lines) ? lines : [];
@@ -503,6 +621,8 @@ export function findLandingEvidence(lines, tip, opts) {
   const committedAtMs = toEpochMs(typeof optsSafe.committedAtIso === "string" ? optsSafe.committedAtIso : null);
 
   let pushOkCount = 0;
+  let adoptOkCount = 0;
+  let ffadoptOkCount = 0;
   let noopOkCount = 0;
   let newestNoop = null;
 
@@ -510,19 +630,33 @@ export function findLandingEvidence(lines, tip, opts) {
     const rawLine = arr[i];
     const parsed = parseGateEvidenceLine(typeof rawLine === "string" ? rawLine : "");
     if (parsed.kind === "other") continue;
-    if (parsed.kind === "push-ok") {
-      pushOkCount += 1;
+    // Tip-named success evidence: push-ok, plus the two adoption-family OK
+    // lines (SUBC-045 — exact-tip acceptance in BOTH strict and default
+    // modes, mirroring how a tip-named push-ok counts).
+    if (
+      parsed.kind === "push-ok" ||
+      parsed.kind === "adopt-ok" ||
+      parsed.kind === "ffadopt-ok"
+    ) {
+      if (parsed.kind === "push-ok") pushOkCount += 1;
+      else if (parsed.kind === "adopt-ok") adoptOkCount += 1;
+      else ffadoptOkCount += 1;
       if (parsed.tip !== null && parsed.tip === tipNorm) {
+        const runIdNote = parsed.kind === "push-ok" ? `run id=${parsed.runId ?? "?"}, ` : "";
         return {
           found: true,
           evidence: { ...parsed, line: typeof rawLine === "string" ? rawLine : "" },
           matchKind: "exact-tip",
           reason:
-            `push-ok gate evidence names tip ${tipNorm} ` +
-            `(run id=${parsed.runId ?? "?"}, evidence ts=${parsed.ts ?? "unknown"})`,
+            `${parsed.kind} gate evidence names tip ${tipNorm} ` +
+            `(${runIdNote}evidence ts=${parsed.ts ?? "unknown"})`,
         };
       }
+      // SUBC-044 descendant acceptance is scoped to push-ok lines: an
+      // adoption-family line naming a DIFFERENT tip proves nothing about
+      // this tip (no pushed-run ancestry story), so it keeps scanning.
       if (
+        parsed.kind === "push-ok" &&
         typeof isTipDescendant === "function" &&
         parsed.tip !== null &&
         parsed.tip !== tipNorm &&
@@ -586,7 +720,9 @@ export function findLandingEvidence(lines, tip, opts) {
     }
   }
 
-  const strictNote = allowNoop ? "" : " (strict mode: only tip-named push-ok evidence counts)";
+  const strictNote = allowNoop
+    ? ""
+    : " (strict mode: only tip-named push-ok/adopt-ok/ffadopt-ok evidence counts)";
   const commitTimeNote =
     allowNoop && committedAtMs === null
       ? "; the noop-ok fallback cannot apply because the tip commit time is unknown"
@@ -597,7 +733,8 @@ export function findLandingEvidence(lines, tip, opts) {
     matchKind: null,
     reason:
       `no gate success evidence for tip ${tipNorm}: scanned ${String(arr.length)} line(s) ` +
-      `(${String(pushOkCount)} push-ok, ${String(noopOkCount)} noop-ok, rest non-evidence) ` +
+      `(${String(pushOkCount)} push-ok, ${String(adoptOkCount)} adopt-ok, ` +
+      `${String(ffadoptOkCount)} ffadopt-ok, ${String(noopOkCount)} noop-ok, rest non-evidence) ` +
       `with none naming this tip${strictNote}${commitTimeNote}`,
   };
 }

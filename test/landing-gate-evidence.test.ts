@@ -43,6 +43,17 @@ const noopOk = (ts: string): string =>
 const checkLine = (ts: string): string =>
   `${ts} push-main-when-ahead --check: ahead=0 behind=0 → noop (local main == origin/main; nothing to push)`;
 
+// SUBC-045 adoption-family fixtures (synthetic shas in the real grammar
+// shape): a tree-identity adoption receipt (SUBC-027 wording, recognized as
+// landing evidence from SUBC-045) and a fast-forward adoption receipt
+// (SUBC-045 emission + recognition in the same task).
+const TIP_ADOPT = "3cb44d70000000000000000000000000000000aa";
+const TIP_FF = "045ffad0000000000000000000000000000000cc";
+const adoptOkLine = (ts: string, tip: string): string =>
+  `${ts} push-main-when-ahead: OK adopted origin/main tip ${tip} (tree-identical diverged local main healed)`;
+const ffadoptOkLine = (ts: string, tip: string): string =>
+  `${ts} push-main-when-ahead: OK fast-forwarded local main onto origin/main tip ${tip} (behind-only local main healed)`;
+
 describe("parseGateEvidenceLine", () => {
   it("parses a timestamped push-ok line: tip lowercased, run id captured", () => {
     const parsed = parseGateEvidenceLine(pushOkF07("2026-11-04T12:01:09.825Z"));
@@ -182,6 +193,69 @@ describe("parseGateEvidenceLine", () => {
       tip: null,
       runId: null,
     });
+  });
+
+  // SUBC-045: adoption-family OK lines are the gate's third and fourth
+  // recognized success shapes.
+  it("parses a timestamped ffadopt-ok line: tip lowercased, run id null", () => {
+    const parsed = parseGateEvidenceLine(ffadoptOkLine("2026-11-05T16:00:00.000Z", TIP_FF));
+    expect(parsed).toEqual({
+      ts: "2026-11-05T16:00:00.000Z",
+      kind: "ffadopt-ok",
+      tip: TIP_FF,
+      runId: null,
+    });
+  });
+
+  it("parses a bare adopt-ok line without the ISO timestamp prefix", () => {
+    const parsed = parseGateEvidenceLine(adoptOkLine("", TIP_ADOPT).trim());
+    expect(parsed).toEqual({
+      ts: null,
+      kind: "adopt-ok",
+      tip: TIP_ADOPT,
+      runId: null,
+    });
+  });
+
+  it("normalizes an uppercase tip in an adopt-ok line to lowercase", () => {
+    const parsed = parseGateEvidenceLine(adoptOkLine("2026-11-05T16:05:00.000Z", TIP_ADOPT.toUpperCase()));
+    expect(parsed.kind).toBe("adopt-ok");
+    expect(parsed.tip).toBe(TIP_ADOPT);
+    expect(parsed.runId).toBeNull();
+  });
+
+  it("keeps short-sha lookalikes of both adoption shapes as other (grammar pinning)", () => {
+    const shortSha = "3cb44d7";
+    const lookalikes = [
+      `2026-11-05T16:00:00.000Z push-main-when-ahead: OK fast-forwarded local main onto origin/main tip ${shortSha} (behind-only local main healed)`,
+      `2026-11-05T16:00:00.000Z push-main-when-ahead: OK adopted origin/main tip ${shortSha} (tree-identical diverged local main healed)`,
+    ];
+    for (const line of lookalikes) {
+      expect(parseGateEvidenceLine(line)).toEqual({
+        ts: null,
+        kind: "other",
+        tip: null,
+        runId: null,
+      });
+    }
+  });
+
+  it("classifies the SUBC-045 fast-forward narration and refinement lines as other (grammar non-collision)", () => {
+    // The adoption narration names both tips and even the word "OK"-less
+    // mechanics — none of it may collide with the adoption OK grammar:
+    // narration is deliberately non-evidence (only the final OK line counts).
+    const lines = [
+      `2026-11-05T16:00:00.000Z push-main-when-ahead: fast-forward refinement: local main is BEHIND origin/main by 2 commit(s) with nothing ahead (strict fast-forward shape): fast-forwarding refs/heads/main onto the origin tip via compare-and-swap update-ref (no push, no merge, no force, no content change — the origin tip already contains the local tip)`,
+      `2026-11-05T16:00:01.000Z push-main-when-ahead: fast-forwarding local main ${TIP_ADOPT} onto behind-only origin/main ${TIP_FF} (compare-and-swap update-ref of refs/heads/main; reflog recorded; no push, no merge, no worktree change)`,
+    ];
+    for (const line of lines) {
+      expect(parseGateEvidenceLine(line)).toEqual({
+        ts: null,
+        kind: "other",
+        tip: null,
+        runId: null,
+      });
+    }
   });
 });
 
@@ -487,6 +561,76 @@ describe("findLandingEvidence", () => {
         isTipDescendant: true as unknown as (a: string, p: string) => boolean,
       })
     ).toThrow(/isTipDescendant/);
+  });
+
+  // SUBC-045: adoption-family OK lines are DIRECT landing evidence.
+  it("strict mode finds a tip-matched ffadopt-ok line as direct landing evidence", () => {
+    const lines = [ffadoptOkLine("2026-11-05T16:00:00.000Z", TIP_FF)];
+    const result = findLandingEvidence(lines, TIP_FF, {
+      committedAtIso: null,
+      allowNoopFallback: false,
+    });
+    expect(result.found).toBe(true);
+    expect(result.matchKind).toBe("exact-tip");
+    expect(result.evidence?.kind).toBe("ffadopt-ok");
+    expect(result.evidence?.tip).toBe(TIP_FF);
+    expect(result.evidence?.runId).toBeNull();
+    expect(result.evidence?.ts).toBe("2026-11-05T16:00:00.000Z");
+    expect(result.reason).toContain("ffadopt-ok gate evidence names tip");
+    expect(result.reason).toContain(TIP_FF);
+  });
+
+  it("strict mode does NOT accept an ffadopt-ok naming a different tip (exact-tip only, even with a proving predicate)", () => {
+    // Invariant: the SUBC-044 descendant acceptance is scoped to push-ok
+    // lines. An adoption receipt naming a DIFFERENT tip carries no pushed-run
+    // ancestry story, so even a predicate that would return true must never
+    // let it stand in for another tip.
+    const lines = [ffadoptOkLine("2026-11-05T16:00:00.000Z", TIP_FF)];
+    const result = findLandingEvidence(lines, TIP_ADOPT, {
+      committedAtIso: null,
+      allowNoopFallback: false,
+      isTipDescendant: () => true,
+    });
+    expect(result.found).toBe(false);
+    expect(result.matchKind).toBeNull();
+    expect(result.reason).toContain("1 ffadopt-ok");
+    expect(result.reason).toContain("strict mode");
+  });
+
+  it("default mode finds a tip-matched adopt-ok line without falling back to noop-ok", () => {
+    // Newest-first scan: the tip-named adopt-ok (later in the array) wins
+    // before the noop fallback is even consulted — and the only noop-ok in
+    // the log predates the tip commit time, so the adoption receipt is
+    // genuinely what proves this landing.
+    const lines = [
+      noopOk("2026-11-05T15:00:00.000Z"),
+      adoptOkLine("2026-11-05T16:00:00.000Z", TIP_ADOPT),
+    ];
+    const result = findLandingEvidence(lines, TIP_ADOPT, {
+      committedAtIso: "2026-11-05T15:30:00.000Z",
+      allowNoopFallback: true,
+    });
+    expect(result.found).toBe(true);
+    expect(result.matchKind).toBe("exact-tip");
+    expect(result.evidence?.kind).toBe("adopt-ok");
+    expect(result.evidence?.tip).toBe(TIP_ADOPT);
+  });
+
+  it("the not-found reason summary includes the adoption-family evidence counts", () => {
+    const lines = [
+      pushOk530("2026-11-05T14:00:00.000Z"),
+      adoptOkLine("2026-11-05T16:00:00.000Z", TIP_ADOPT),
+      ffadoptOkLine("2026-11-05T17:00:00.000Z", TIP_FF),
+      noopOk("2026-11-05T18:00:00.000Z"),
+    ];
+    const result = findLandingEvidence(lines, TIP_F07, {
+      committedAtIso: null,
+      allowNoopFallback: false,
+    });
+    expect(result.found).toBe(false);
+    expect(result.reason).toContain("scanned 4 line(s)");
+    expect(result.reason).toContain("1 push-ok, 1 adopt-ok, 1 ffadopt-ok, 1 noop-ok");
+    expect(result.reason).toContain("none naming this tip");
   });
 });
 

@@ -1408,3 +1408,68 @@ Reversibility: lint-config, package-script, page-effect, and test-lane changes l
 - **Closure condition:** this open item closes when the operator-installed cron produces its first tick — cron.log exists with tick output — and a subsequent landing publishes without a manual session (the card's post-install acceptance sequence). Until then manual flushes remain the mandated trigger per agents.md; a tip-named push-ok line alone is NOT proof of revival (see the SUBC-040 attribution entry, landed 2026-11-06).
 
 - **Scope note:** this task deliberately did not touch host scheduling; the only tracked change is this entry.
+
+## Landing-gate fast-forward adoption — 2026-11-05 (SUBC-045)
+
+**Decision: the landing gate now self-heals the last remaining manual-repair
+shape. When local `main` is strictly BEHIND `origin/main` (ahead = 0,
+behind > 0 — origin advanced, e.g. a PR squash landed or an operator push,
+while local has nothing new of its own), the gate fast-forwards the local
+`refs/heads/main` onto the origin tip — a compare-and-swap `git update-ref`
+with an explicit reflog message naming both tips, re-proven ancestry, a 0/0
+convergence re-check, and the authoritative `verify-ci-currency.mjs` chain —
+exit 0 when currency holds. Diverged-with-differing-trees and
+contradicted-ancestry shapes still refuse loudly with an alert. This closes
+the gap SUBC-027 deliberately left open (its entry scoped adoption to the
+diverged-only shape).**
+
+Context and design:
+
+- **Why strict-FF healing is safe:** ahead = 0 is itself the containment
+  proof — the origin tip already contains the local tip, so moving the local
+  ref onto it changes no content, drops no commit, and rewrites no history.
+  The gate still re-proves the ancestry at CAS time (`git merge-base
+  --is-ancestor <localTip> <originTip>` in `probeAncestry`, mirroring
+  `probeTreeIdentity`'s exit-status mapping): a false result contradicts the
+  decision-time counts and throws into the outer catch (alert + exit 1)
+  instead of moving any ref on contradictory evidence.
+- **Additive sibling, unchanged contracts:** `refineRefusalWithFastForward`
+  (pure logic in `ci-currency-lib.mjs`) converts ONLY the behind-only
+  refusal into `ffadopt-origin`; `decideAction`'s contract, reason wordings,
+  and the tree-identity refinement's semantics are untouched (the two
+  refinements are additive siblings, neither widens the other's scope — the
+  diverged boundary test from SUBC-027 still passes verbatim). The gate
+  branch uses the EXACT same CAS argv literal order as the tree-identity
+  branch (NEW value before OLD value; both occurrences wiring-pinned), the
+  same 0/0 convergence throw, and the same `runVerifyChain()`; `assertMainRef`
+  now guards all three ref-moving paths (push, adopt, ff-adopt). The
+  read-only `--check` probe refines the behind-only shape too and reports
+  the would-be fast-forward; probe failures report `probes-unknown`
+  (generalized from `trees-unknown`) without crashing.
+- **Evidence-grammar extension (and a discovered gap):** the SUBC-028
+  landing-evidence grammar now recognizes BOTH adoption-family OK lines —
+  the new `OK fast-forwarded local main onto origin/main tip <sha>
+  (behind-only local main healed)` AND the pre-existing SUBC-027 `OK adopted
+  origin/main tip <sha> (tree-identical diverged local main healed)`, which
+  planning discovered the grammar had NEVER classified (tree-identity
+  adoptions could not earn a strict landing receipt before this task).
+  Adoption kinds are accepted as DIRECT tip-named evidence in strict and
+  default modes with exact-tip matching only; the SUBC-044 descendant-tip
+  predicate stays scoped to push-ok lines (an adoption naming a different
+  tip carries no pushed-run ancestry story).
+- **Known benign races (both alert loudly, both heal on a later tick):** an
+  engine fast-forward joining mid-run can make the CAS old-value mismatch →
+  update-ref fails → outer catch → alert; origin advancing past the captured
+  tip between decision and convergence → the 0/0 re-check throws → alert →
+  the next tick measures the new state and heals it. Neither race can move
+  a ref to a wrong state.
+- **Invariant kept:** the gate still never pushes, merges, rebases, or
+  force-updates anything; only `refs/heads/main` ever moves, always via
+  compare-and-swap `update-ref` with a pinned, redact-invariant reflog
+  record. Verification: unit + wiring pins in `test/ci-currency-guard.test.ts`
+  and `test/landing-gate-evidence.test.ts`, plus a scratch-repo rehearsal
+  (gitignored sandbox, scratch-local `HOME` isolation, stubbed verify chain)
+  proving the original behind-only repro now heals with the pinned reflog
+  and OK receipt, the diverged-differing-trees refusal is unchanged, and the
+  tree-identity adoption regression is unchanged — with both adoption
+  receipts accepted by the strict landing checker in the sandbox.

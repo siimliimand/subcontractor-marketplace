@@ -8,11 +8,15 @@
  * closes that gap: for a given landing tip it requires BOTH
  *
  *   (evidence leg)  a successful gate run recorded for that tip in
- *                   ~/.local/state/ci-currency/auto-push.log — either a
- *                   push-ok line naming the tip exactly ("OK main pushed and
- *                   green (tip <sha>, run id=<id>)") or a push-ok line whose
- *                   pushed tip provably descends from the audited tip
- *                   (ancestry proven via git merge-base --is-ancestor with a
+ *                   ~/.local/state/ci-currency/auto-push.log — a tip-named
+ *                   push-ok line ("OK main pushed and green (tip <sha>,
+ *                   run id=<id>)") naming the tip exactly, an adoption-family
+ *                   OK line naming the tip exactly (SUBC-045: "OK adopted
+ *                   origin/main tip <sha>" or "OK fast-forwarded local main
+ *                   onto origin/main tip <sha>" — a self-healed landing
+ *                   leaves the same class of receipt as a push), a push-ok
+ *                   line whose pushed tip provably descends from the audited
+ *                   tip (ancestry proven via git merge-base --is-ancestor with a
  *                   git cat-file object guard; SUBC-044: a later legitimate
  *                   gate push necessarily carried the audited commit to
  *                   origin history) or, in default mode only, a noop-ok
@@ -35,7 +39,7 @@
  *
  * Usage:
  *   node scripts/verify-landing-gate.mjs                # audit current local main
- *   node scripts/verify-landing-gate.mjs --strict       # exact/descendant push evidence only
+ *   node scripts/verify-landing-gate.mjs --strict       # tip-named push/adopt/ff-adopt evidence only
  *   node scripts/verify-landing-gate.mjs <sha>          # audit a historical tip
  *   node scripts/verify-landing-gate.mjs --strict <sha> # forensics on a tip
  *
@@ -79,8 +83,10 @@ function usageExit(args) {
       `  node scripts/verify-landing-gate.mjs [--strict] [<full-or-short sha>]\n` +
       `    no sha    → audit the current local main tip\n` +
       `    <sha>     → audit that historical landing tip (resolved via git rev-parse)\n` +
-      `    --strict  → demand tip-named push evidence, exact or proven-descendant\n` +
-      `                (ancestry via git merge-base --is-ancestor; no noop-ok\n` +
+      `    --strict  → demand tip-named gate success evidence (push-ok, or the\n` +
+      `                adoption-family adopt-ok/ffadopt-ok receipts, exact-tip\n` +
+      `                only; proven-descendant acceptance stays scoped to\n` +
+      `                push-ok lines via git merge-base --is-ancestor; no noop-ok\n` +
       `                fallback); used for landing forensics\n` +
       `This checker is read-only: it never pushes, never takes the gate lock, and\n` +
       `never writes auto-push.log or the alert file. Failed audits list the pushed\n` +
