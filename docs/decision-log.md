@@ -1473,3 +1473,24 @@ Context and design:
   and OK receipt, the diverged-differing-trees refusal is unchanged, and the
   tree-identity adoption regression is unchanged — with both adoption
   receipts accepted by the strict landing checker in the sandbox.
+
+## Origin-ref retirement recipe referenced from agents.md — 2026-11-12 (SUBC-057)
+
+**Decision: the agents.md "Local task-branch hygiene (SUBC-026, promoted 2026-11-06)" section gains one numbered clause (item 5) that routes the stray-origin-task-branch case to the standing operator recipe recorded in "Origin-ref retirement policy for closed-task remote branches — 2026-11-05 (SUBC-050)" — referencing, never duplicating: the clause names the recipe's gates (closure proof, Gate A/B provenance, rescue pin at the exact tip sha, pre/post ls-remote snapshots, the single sanctioned git push origin --delete, per-retirement decision-log record) and its operator-only execution boundary, quotes both the SUBC-050 and SUBC-019 ("Origin branch cleanup — 2026-11-04") headings character-for-character so deterministic grep -F checks pin them, and names the PR #3 leftover fusion/subc-011 as the historical case. The SUBC-050 entry remains the single authoritative policy; agents.md points. This amendment executed NO part of the retirement recipe and mutated NO ref of any kind — fulfilling the SUBC-050 "agents.md codification pointer" follow-up routing (one clause plus a decision-log pointer, dependent on SUBC-039 landing first, which landed 2026-11-06).**
+
+Evidence (2026-11-12, worktree `subc-057`, branch `fusion/subc-057`):
+
+| Check | Method | Result |
+|---|---|---|
+| Dependency gate | fn_task_show SUBC-039 + grep heading count | done; `^## Local task-branch hygiene` exactly 1 in the worktree (:403) |
+| Policy anchor | grep -F "Origin-ref retirement policy for closed-task remote branches — 2026-11-05 (SUBC-050)" docs/decision-log.md | 2 matches — :1048 the authoritative entry heading, plus this amendment's own Decision paragraph quote |
+| Currency | git rev-list --left-right --count origin/main...main | `0\t0` — converged at `b9e9c859` when this task's branch started; no behind, no divergence |
+| Negative controls (pre-edit) | grep -c SUBC-050 in agents.md; grep -c SUBC-057 in docs/decision-log.md | 0 and 0 — both genuinely new; SUBC-019 / PR #3 leftover / Gate A/B counts in agents.md also 0 pre-edit |
+| Clause insertion | grep -c "SUBC-050" agents.md | exactly 2 — the clause's policy tag ("operator recipe only (SUBC-050)") and the quoted authoritative entry heading; no other line mentions it |
+| Remote-delete count | grep -c "git push origin --delete" agents.md | exactly 2 — the ci-gate-probe cleanup line plus the clause's single sanctioned command, the latter qualified "(operator-executed only; no automation gains delete-capable remote credentials)" |
+| Heading identity | grep -F both quoted headings in agents.md | exactly 1 each — both headings sit on single physical lines, character-for-character identical to docs/decision-log.md (:299 SUBC-019, :1048 SUBC-050) |
+| Amendment placement | grep -c "^## Origin-ref retirement recipe referenced from agents.md" docs/decision-log.md; tail | exactly 1; this entry is the file's last entry (log stays append-only) |
+| Payload fidelity | Step 1 correction commit `d3c21a4` | clause 5 is the spec-drafted text verbatim — clause number 5, the clause-3 cross-reference, and the 3-space continuation indent already match the landed SUBC-039 list, so no sanctioned adaptation was needed; an earlier interim draft on this branch (grep -c line-mode 1 plus an extra probe-cleanup sentence) was replaced before landing |
+| Existing content untouched | git diff --numstat origin/main...HEAD | agents.md 22 added / 0 deleted (pure insertion at the section tail; clauses 1–4 and every other section byte-unchanged); docs/decision-log.md append-only (21 added / 0 deleted) |
+
+Reversibility: one commit on `fusion/subc-057` through the standard landing gate; docs-only, no code, no ref mutation. Owner: Backend Engineer (SUBC-057 delivery); origin-ref retirements remain operator-executed per the SUBC-050 policy.

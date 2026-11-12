@@ -442,4 +442,26 @@ section carries the binding clauses:
    contract for cases outside the engine's automated paths (branches held
    by live worktrees, operator-provenance branches, cross-worktree
    handoffs).
+5. **Origin task branches: operator recipe only (SUBC-050).** Clause 3
+   keeps origin refs outside agent hygiene sweeps — no agent, script, or
+   automation ever deletes a remote ref, and the single-writer landing
+   contract is unchanged. If a stray origin `fusion/*` branch is ever
+   found (the historical case: `fusion/subc-011`, the PR #3 leftover,
+   retired 2026-11-04 per
+   "Origin branch cleanup — 2026-11-04 (SUBC-019)"), the operator
+   executes the standing recipe recorded in
+   "Origin-ref retirement policy for closed-task remote branches — 2026-11-05 (SUBC-050)"
+   — never improvises: closure proof (task store and task artifact agree
+   the owning task is closed), Gate A/B provenance (squash-commit
+   ancestry of `origin/main`, or bounded tree-equality against the
+   squash for the squash-merge shape), a local rescue pin verified at
+   the exact tip sha BEFORE the ref disappears (pins are never pushed;
+   the recreate command is recorded), pre/post `ls-remote` snapshots,
+   the single sanctioned
+   `git push origin --delete <branch>` (operator-executed only; no
+   automation gains delete-capable remote credentials), and an
+   append-only decision-log record per retirement. The full policy
+   specification (scope, pins-never-pushed reconciliation,
+   unlanded-content carve-out, re-evaluation trigger) lives in that
+   entry; this clause only routes to it.
 
