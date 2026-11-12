@@ -33,10 +33,11 @@
   the counts make sense; never pipe the import straight into `d1 execute`.
 - **Read-only `--dry-run` diagnostics (SUBC-029):** before generating the real
   SQL, run `node scripts/import-mtr.mjs <file.xml> --dry-run > dry-run.sql`
-  and apply that bundle to capture BEFORE counts — it contains ONLY three
-  SELECTs (current `mtr:%` trade-notification rows by status, the exact rows
-  the expire UPDATE would flip, and how many matched undertakers exist in
-  `companies`), so applying it writes nothing by construction. A guarded
+  and apply that bundle to capture BEFORE counts — it contains ONLY read-only SELECTs — the three SUBC-029 diagnostics
+  (current `mtr:%` trade-notification rows by status, the exact rows the
+  expire legs would flip, and how many matched undertakers exist in
+  `companies`) plus one `would_expire_dropped` projection per expire chunk
+  (SUBC-041) — so applying it writes nothing by construction. A guarded
   dry-run (drifted file) still prints the diagnostics, then exits 1.
   `--force-expire` is ignored under `--dry-run` (explicit warning, zero
   writes — dry-run wins unconditionally). Then review the real SQL against
@@ -55,6 +56,16 @@
   file can never flip every `mtr:%` trade_notification row to `invalid` in one
   pass. `--force-expire` overrides explicitly (exit 0 + WARNING); treat that
   flag as an operator decision, never a workaround for unexplained counts.
+- **MTR per-trade expire (SUBC-041):** the import also expires stale valid
+  rows of companies STILL listed in the import for trades the current import
+  no longer carries (closes the SUBC-015 deferral). Emission is chunked —
+  byte-budgeted at 90,000 bytes against D1's 100,000-byte statement cap,
+  whole registry codes atomic per chunk — so the dry-run's per-chunk
+  `would_expire_dropped` projections sum exactly to the flips the apply
+  makes. Guard, force-expire, idempotency, and dry-run read-only behavior
+  are unchanged; validate the closure from the dry-run projections before
+  applying.
+
 - **MTR/Tarvik badge display stays behind `MTR_BADGES_ENABLED` (default off)
   until the founder's TTJA licence confirmation (CC BY-SA 3.0 share-alike) is
   recorded** — docs/phase0/register-findings.md follow-up #1. Importing is

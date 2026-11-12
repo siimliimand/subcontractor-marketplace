@@ -1331,3 +1331,48 @@ Probes ran from the subc-040 worktree via the sanctioned `$HOME` indirection (`"
 Rows 9–16 re-derived live from the gate log + gh run list at execution (2026-11-06); rows 17–18 appended at apply from the same gate log under the same re-derivation rule (2026-11-11). Execution-time currency at the 2026-11-06 derivation was local main `172ebe4` ahead-only vs origin/main `b0fe733` — the standing manual-flush reality; at apply (2026-11-11) currency is restored: local main == origin/main == `23b5f34` (run #42 green). The flush is owned by the landing checklist / SUBC-043, never this docs task.
 
 **Residual operator confirmation ask (one sentence either way):** did the operator manually run `push-main-when-ahead` at ~2026-11-04T19:57:50Z (the run that published `4fb75f0`), and does the operator intend to install the documented */10 timer line (the canonical install block in `docs/operator-ci-currency-cron.md`)? Until either answer arrives, every landing keeps needing a manual flush, and every tip-named push-ok line keeps needing the tick-log cross-check recorded in this entry.
+
+## Per-trade expire for MTR companies still listed in the import — 2026-11-11 (SUBC-041)
+
+**Decision: `buildImportPlan` now emits `expireStatements` (plural): leg A — the
+company-absent expire UPDATE — byte-for-byte unchanged, followed by chunked
+per-trade expire legs that retire exactly the stale `mtr:%` trade_notification
+rows of listed (company, trade) pairs the current import no longer carries.
+This closes the SUBC-015 limitation ("a company present in the import that
+dropped one trade keeps its stale valid row for that trade"), which that
+entry recorded as a deliberate deferral. Pair packing is byte-budgeted at
+90,000 bytes per emitted statement (D1 caps statements at 100,000) with whole
+registry codes kept atomic per chunk, so every stale dropped-trade row
+belongs to exactly one leg and the dry-run's per-chunk `would_expire_dropped`
+COUNT projections sum exactly to the flips the apply makes. The zero-upsert
+guard (drifted file still emits no expire legs), force-expire semantics (leg
+A only, `IN ('')`), idempotency (re-running the same SQL changes nothing),
+and dry-run read-only guarantees are unchanged; the dry-run bundle gains one
+projection per chunk and stays write-free.**
+
+Relationship to landed work: SUBC-029's decision-log entry records the
+production re-import as an operator HANDOFF, not applied; there is still no
+evidence the reimport-runbook has been applied. This change is offline-inert
+(it only alters FUTURE generated SQL; nothing auto-applies) and idempotent,
+so it is safe whether or not the first reimport has run. The operator's NEXT
+import pass — dry-run first, per the agents.md flow — now projects per-trade
+retirements via the new `would_expire_dropped` lines; projected counts that
+match the apply are the closure validation the SUBC-015 entry asked for.
+
+Evidence (2026-11-11, worktree `subc-041`, branch `fusion/subc-041`):
+
+| Check | Result | Implication |
+|---|---|---|
+| Red reproduction against the unmodified lib: `vitest run -t "SUBC-041"` | exit 1, `expected 'valid' to be 'invalid'`, 1 failed / 27 skipped (log: scratch.local/subc041-red-run.log) | the SUBC-015 gap reproduced at D1 level before any lib change |
+| Targeted suite post-implementation | 34/34 green (27 originals updated for the rename + 7 new: parity, NULL-trade hygiene, multi-chunk parity, 2 chunker units, size cap) | rename `expireStatement` → `expireStatements` complete across lib, d.mts, CLI docs, and every pin; singular-name grep over scripts/test shows no live pin left |
+| D1 statement cap | size-cap test: 1,400 synthetic companies × 6 trades → 8,400 pairs; every emitted statement ≤ 100,000 bytes; every chunk leg ≤ 91,500 | chunking mandatory and effective at production scale (real export ≈ 8,095 pairs ≈ 210KB unchunked) |
+| Parity | dry-run `would_expire` + Σ `would_expire_dropped` equals actual flipped rows exactly (2==2 seeded; 1==1 across forced multi-chunk at the 400-byte floor) | the operator's dry run alone validates the closure before applying |
+| Guard / force / idempotency / dry-run regressions | all original pins green after rename-only edits; guarded dry-run still emits exactly the 3 SUBC-029 SELECTs | SUBC-015 and SUBC-029 guarantees preserved byte-for-byte |
+| Gates | full suite 422/422 across 43 files; `tsc --noEmit` clean; eslint clean on touched files | no collateral drift outside the task's file scope |
+
+Reversibility: one commit on `fusion/subc-041` through the standard landing
+gate; the change touches only the offline import lib
+(`scripts/import-mtr-lib.mjs`), its type mirror, CLI header docs, the test
+file, and documentation. `scratch.local/` probe/replay scripts are gitignored
+scratch. Owner: Backend Engineer (SUBC-041); the operator owns validation of
+the next production import pass against the new projections.

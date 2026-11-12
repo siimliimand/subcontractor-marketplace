@@ -32,12 +32,30 @@ export declare type ImportUpsert = {
   status: "valid" | "invalid";
 };
 
+/** Byte budget ceiling for chunked per-trade expire legs (D1 cap: 100,000). */
+export declare const MAX_PAIR_CHUNK_BUDGET_BYTES: number;
+
+/** One byte-budgeted chunk of (code, trade) pairs (SUBC-041). */
+export declare type ExpireChunk = {
+  /** Quoted, comma-joined registry codes present in this chunk. */
+  codesList: string;
+  /** Quoted (code, trade) tuple literals, comma-joined (VALUES body). */
+  pairsText: string;
+};
+
+/** Pack upsert pairs into chunks; whole codes stay atomic per chunk. */
+export declare function chunkPairsByBudget(
+  upserts: ImportUpsert[],
+  budgetBytes?: number,
+): ExpireChunk[];
+
 /** The executable import plan produced by buildImportPlan. */
 export declare type ImportPlan = {
   undertakersRead: number;
   matchedUndertakers: number;
   upserts: ImportUpsert[];
-  expireStatement: string | null;
+  /** Leg A plus chunked per-trade legs, in emission order (empty when guarded). */
+  expireStatements: string[];
   warnings: string[];
   guarded: boolean;
   /** True when built with opts.dryRun: planToSql emits read-only SQL only. */
@@ -60,6 +78,8 @@ export declare type BuildImportPlanOptions = {
   forceExpire?: boolean;
   /** Read-only diagnostics mode: no INSERT/UPDATE is ever rendered (SUBC-029). */
   dryRun?: boolean;
+  /** Byte budget for chunked per-trade expire legs (clamped to <= 90,000). */
+  chunkBudgetBytes?: number;
 };
 
 /** Parse an MTR/Tarvik open-data XML export into an executable import plan. */

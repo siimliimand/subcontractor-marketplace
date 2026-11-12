@@ -30,9 +30,19 @@
  * with --force-expire emits the expire UPDATE anyway (audited via a WARNING
  * comment in the SQL and a stderr note).
  *
+ * PER-TRADE EXPIRE (SUBC-041, closes the SUBC-015 deferred limitation): a
+ * company still listed in the import that dropped a single licence trade
+ * gets exactly that stale row expired via chunked per-trade UPDATE legs
+ * (byte-budgeted at 90,000 bytes against D1's 100,000-byte statement cap;
+ * whole registry codes stay atomic per chunk, so the dry-run projections
+ * sum exactly to the applied flips). Guard, force-expire, idempotency and
+ * dry-run read-only guarantees are unchanged.
+ *
  * DRY-RUN (--dry-run, SUBC-029): emits ONLY read-only diagnostics — current
  * mtr:% trade_notification row counts by status, the exact rows the expire
- * UPDATE would flip, and how many matched undertakers exist in companies —
+ * legs would flip (company-absent leg A plus one dropped-trade projection
+ * per per-trade expire chunk, SUBC-041), and how many matched undertakers
+ * exist in companies —
  * followed by a projection summary. Structurally contains no INSERT/UPDATE
  * for any input; --force-expire is ignored under --dry-run (with a warning).
  *

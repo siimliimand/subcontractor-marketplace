@@ -19,7 +19,13 @@ import { companies, companyVerifications } from "../src/worker/db/schema";
 import legacyFixture from "../scripts/fixtures/mtr-sample.xml?raw";
 import lubaFixture from "../scripts/fixtures/mtr-luba-sample.xml?raw";
 import driftFixture from "../scripts/fixtures/mtr-format-drift.xml?raw";
-import { buildImportPlan, planToSql, DEFAULT_DATASET } from "../scripts/import-mtr-lib.mjs";
+import {
+  MAX_PAIR_CHUNK_BUDGET_BYTES,
+  chunkPairsByBudget,
+  buildImportPlan,
+  planToSql,
+  DEFAULT_DATASET,
+} from "../scripts/import-mtr-lib.mjs";
 
 // Injected clock: end dates in fixtures are chosen relative to this date.
 const TODAY = "2026-11-04";
@@ -40,7 +46,7 @@ describe("legacy teatised/teatis layout (scripts/fixtures/mtr-sample.xml)", () =
 
   it("keeps the expire-all UPDATE and byte-faithful summary/header text", () => {
     const plan = buildImportPlan(legacyFixture, planOpts);
-    expect(plan.expireStatement).toMatch(
+    expect(plan.expireStatements[0]).toMatch(
       /^-- Expire trade notifications[\s\S]*UPDATE company_verifications[\s\S]*registrationIdentifier IN \('12345678','34567890'\)/,
     );
     expect(plan.summaryComment).toBe(
@@ -58,7 +64,7 @@ describe("legacy teatised/teatis layout (scripts/fixtures/mtr-sample.xml)", () =
   it("renders the plan as three INSERTs + one expire UPDATE + summary", () => {
     const sql = planToSql(buildImportPlan(legacyFixture, planOpts));
     expect((sql.match(/INSERT INTO company_verifications/g) ?? []).length).toBe(3);
-    expect((sql.match(/UPDATE company_verifications/g) ?? []).length).toBe(1);
+    expect((sql.match(/UPDATE company_verifications/g) ?? []).length).toBe(2);
     expect(sql).toContain("'electrical', 'valid', '2026-11-04T12:00:00.000Z', 'mtr:test'");
     expect(sql).toContain("'flooring', 'invalid', '2026-11-04T12:00:00.000Z', 'mtr:test'");
     expect(sql.trimEnd().endsWith(
@@ -120,11 +126,11 @@ describe("current load/luba layout (scripts/fixtures/mtr-luba-sample.xml)", () =
 
   it("keeps the healthy-path expire UPDATE and lists every matched code in it", () => {
     const plan = buildImportPlan(lubaFixture, planOpts);
-    expect(plan.expireStatement).not.toBeNull();
-    expect(plan.expireStatement).toContain("IN ('11111111'");
-    expect(plan.expireStatement).toContain("'(SIRET) 841''489 123 00015'");
-    expect(plan.expireStatement).toContain("'0146519-2','1000000012')");
-    expect(plan.expireStatement).not.toContain("'88888888'");
+    expect(plan.expireStatements).toHaveLength(2); // leg A + one chunk at the default budget
+    expect(plan.expireStatements[0]).toContain("IN ('11111111'");
+    expect(plan.expireStatements[0]).toContain("'(SIRET) 841''489 123 00015'");
+    expect(plan.expireStatements[0]).toContain("'0146519-2','1000000012')");
+    expect(plan.expireStatements[0]).not.toContain("'88888888'");
     expect(plan.warnings).toEqual([]);
     expect(plan.guarded).toBe(false);
   });
@@ -166,7 +172,7 @@ describe("zero-upsert format-drift guard (scripts/fixtures/mtr-format-drift.xml)
     expect(plan.undertakersRead).toBe(2);
     expect(plan.matchedUndertakers).toBe(0);
     expect(plan.upserts).toEqual([]);
-    expect(plan.expireStatement).toBeNull();
+    expect(plan.expireStatements).toEqual([]);
     expect(plan.guarded).toBe(true);
     expect(plan.warnings).toHaveLength(1);
     expect(plan.warnings[0]).toMatch(
@@ -200,17 +206,17 @@ describe("zero-upsert format-drift guard (scripts/fixtures/mtr-format-drift.xml)
 </ettevotjad>`;
     const plan = buildImportPlan(mappingDrift, planOpts);
     expect(plan.guarded).toBe(true);
-    expect(plan.expireStatement).toBeNull();
+    expect(plan.expireStatements).toEqual([]);
     expect(plan.warnings[0]).toMatch(/extracted 1 trade notice\(s\) but none mapped/);
   });
 
   it("emits the expire UPDATE with an override warning when forceExpire is set", () => {
     const plan = buildImportPlan(driftFixture, { ...planOpts, forceExpire: true });
     expect(plan.upserts).toEqual([]);
-    expect(plan.expireStatement).not.toBeNull();
+    expect(plan.expireStatements).toHaveLength(1); // leg A only: zero pairs -> zero chunk legs
     expect(plan.guarded).toBe(false);
     expect(plan.warnings.some((w) => /OVERRIDE: --force-expire active/.test(w))).toBe(true);
-    expect(plan.expireStatement).toContain("IN ('')"); // no matched companies at all
+    expect(plan.expireStatements[0]).toContain("IN ('')"); // no matched companies at all
     const sql = planToSql(plan);
     expect(sql).toContain("UPDATE company_verifications");
     expect(sql).not.toContain("INSERT INTO company_verifications");
@@ -218,8 +224,8 @@ describe("zero-upsert format-drift guard (scripts/fixtures/mtr-format-drift.xml)
   });
 
   it("keeps healthy imports unguarded (legacy and luba fixtures still expire)", () => {
-    expect(buildImportPlan(legacyFixture, planOpts).expireStatement).not.toBeNull();
-    expect(buildImportPlan(lubaFixture, planOpts).expireStatement).not.toBeNull();
+    expect(buildImportPlan(legacyFixture, planOpts).expireStatements.length).toBeGreaterThan(0);
+    expect(buildImportPlan(lubaFixture, planOpts).expireStatements.length).toBeGreaterThan(0);
     expect(buildImportPlan(legacyFixture, planOpts).guarded).toBe(false);
     expect(buildImportPlan(lubaFixture, planOpts).guarded).toBe(false);
   });
@@ -239,7 +245,7 @@ describe("read-only dry-run diagnostics (SUBC-029)", () => {
     expect(sql).toContain("SELECT status, COUNT(*) AS row_count");
     expect(sql).toContain("SELECT COUNT(*) AS would_expire");
     expect(sql).toContain("SELECT COUNT(*) AS matched_companies");
-    expect((sql.match(/IN \('11111111'/g) ?? []).length).toBe(2);
+    expect((sql.match(/IN \('11111111'/g) ?? []).length).toBe(3);
     expect(sql).toContain("'0146519-2','1000000012')");
     expect(sql).toContain("'(SIRET) 841''489 123 00015'");
     // header and projection summary intact
@@ -249,9 +255,9 @@ describe("read-only dry-run diagnostics (SUBC-029)", () => {
         "-- summary: 10 trade-notification rows would be upserted across 9 undertakers (dry-run — no writes emitted)",
       ),
     ).toBe(true);
-    // structurally: only the three diagnostics SELECTs are executable
+    // structurally: only the diagnostics SELECTs (plus one dropped-trade projection per expire chunk, SUBC-041) are executable
     const statements = toStatements(sql);
-    expect(statements).toHaveLength(3);
+    expect(statements).toHaveLength(4);
     expect(statements.every((s) => /^SELECT/i.test(s))).toBe(true);
   });
 
@@ -261,14 +267,14 @@ describe("read-only dry-run diagnostics (SUBC-029)", () => {
     const sql = planToSql(plan);
     expect(sql).not.toContain("INSERT INTO company_verifications");
     expect(sql).not.toContain("UPDATE company_verifications");
-    expect((sql.match(/IN \('12345678','34567890'\)/g) ?? []).length).toBe(2);
+    expect((sql.match(/IN \('12345678','34567890'\)/g) ?? []).length).toBe(3);
     expect(
       sql.trimEnd().endsWith(
         "-- summary: 3 trade-notification rows would be upserted across 2 undertakers (dry-run — no writes emitted)",
       ),
     ).toBe(true);
     const statements = toStatements(sql);
-    expect(statements).toHaveLength(3);
+    expect(statements).toHaveLength(4);
     expect(statements.every((s) => /^SELECT/i.test(s))).toBe(true);
   });
 
@@ -322,6 +328,85 @@ describe("read-only dry-run diagnostics (SUBC-029)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// SUBC-041 chunker: byte-budgeted, code-atomic pair chunks.
+// ---------------------------------------------------------------------------
+
+describe("SUBC-041 pair chunker (chunkPairsByBudget)", () => {
+  const pair = (registrationIdentifier: string, trade: string) => ({
+    registrationIdentifier,
+    trade,
+    status: "valid" as const,
+  });
+
+  it("keeps every registry code's pairs in exactly one chunk under a tiny budget", () => {
+    const upserts = [
+      pair("AA001111", "electrical-maintenance-works"),
+      pair("AA001111", "hvac-installation-works"),
+      pair("BB002222", "flooring-maintenance-works"),
+      pair("BB002222", "drywall-installation-works"),
+      pair("CC003333", "painting-maintenance-works"),
+      pair("CC003333", "plumbing-installation-works"),
+          pair("DD004444", "electrical-maintenance-works"),
+      pair("EE005555", "hvac-installation-works"),
+      pair("FF006666", "flooring-maintenance-works"),
+      pair("DD004444", "drywall-installation-works"),
+      pair("EE005555", "painting-maintenance-works"),
+      pair("FF006666", "plumbing-installation-works"),
+];
+    const chunks = chunkPairsByBudget(upserts, 100); // clamped to the 400-byte floor
+    expect(chunks.length).toBeGreaterThan(1);
+    const owners = new Map<string, string>();
+    for (const c of chunks) {
+      for (const code of c.codesList.split(",")) {
+        expect(owners.has(code)).toBe(false); // a code never splits across chunks
+        owners.set(code, c.codesList);
+      }
+    }
+    const pairsSeen = chunks.reduce(
+      (n, c) => n + (c.pairsText.match(/\(/g) ?? []).length,
+      0,
+    );
+    expect(pairsSeen).toBe(12); // no pair lost, no pair duplicated
+  });
+
+  it("clamps the budget to the 90,000-byte ceiling from both sides", () => {
+    expect(MAX_PAIR_CHUNK_BUDGET_BYTES).toBe(90_000);
+    const big = Array.from({ length: 4000 }, (_, i) => pair(`code-${i}`, "electrical"));
+    for (const budget of [1, 90_000, 10_000_000]) {
+      for (const c of chunkPairsByBudget(big, budget)) {
+        expect(c.pairsText.length).toBeLessThanOrEqual(90_000);
+      }
+    }
+  });
+
+  it("size cap: an ~8,400-pair plan chunks every leg under D1's 100,000-byte statement limit", () => {
+    const bodies = Array.from({ length: 1400 }, (_, i) => {
+      const code = String(10_000_000 + i * 7);
+      const licences = [43210, 43220, 43310, 43320, 43330, 43340]
+        .map((c) => `<luba><staatus>kehtiv</staatus><emtak><kood>${c}</kood></emtak></luba>`)
+        .join("");
+      return `<ettevotja><registrikood>${code}</registrikood><load>${licences}</load></ettevotja>`;
+    });
+    const xml = `<?xml version="1.0" encoding="UTF-8"?><ettevotjad>${bodies.join("")}</ettevotjad>`;
+    const plan = buildImportPlan(xml, planOpts);
+    expect(plan.upserts).toHaveLength(8400); // 1400 companies x 6 trades
+    expect(plan.expireStatements.length).toBeGreaterThan(2); // chunked, not one blob
+    for (const stmt of plan.expireStatements) {
+      expect(stmt.length).toBeLessThanOrEqual(100_000); // D1 hard statement cap
+    }
+    const chunkLegs = plan.expireStatements.slice(1);
+    for (const leg of chunkLegs) {
+      expect(leg.length).toBeLessThanOrEqual(91_500); // 90,000 budget + fixed prose
+    }
+    const pairsSeen = chunkLegs.reduce(
+      (n, l) => n + (l.slice(l.indexOf("VALUES ")).match(/\('/g) ?? []).length,
+      0,
+    );
+    expect(pairsSeen).toBe(8400); // every pair lands in exactly one chunk
+  });
+});
+
 // Integration: file → plan → planToSql → real miniflare D1 (cloudflare:test).
 // Executes the exact SQL the CLI emits and asserts the resulting rows.
 // ---------------------------------------------------------------------------
@@ -516,6 +601,30 @@ describe("integration: luba-format import SQL against miniflare D1", () => {
     expect(registry[0]!.checkedAt).toBe(PAST_CHECKED_AT); // untouched
   });
 
+  it("SUBC-041: flips a present company's dropped-trade stale row to invalid", async () => {
+    const byCode = await seed();
+    // 22222222 stays listed in the luba plan (plumbing + hvac only); its
+    // pre-existing valid mtr:% row for a trade the plan does NOT list is
+    // the recorded SUBC-015 gap - the import must retire exactly that row.
+    await db().insert(companyVerifications).values({
+      id: crypto.randomUUID(),
+      companyId: byCode["22222222"]!,
+      type: "trade_notification",
+      trade: "flooring",
+      status: "valid",
+      checkedAt: PAST_CHECKED_AT,
+      sourceDataset: "mtr:avaandmed_ettevotjad",
+      sourceLicence: "CC BY-SA 3.0 (per open-data metadata) — TTJA",
+    });
+    await runImportSql(planToSql(buildImportPlan(lubaFixture, planOpts)));
+
+    const statuses = await tradeStatusMap(byCode);
+    expect(statuses.get("22222222:flooring")).toBe("invalid"); // the gap closed
+    expect(statuses.get("22222222:plumbing")).toBe("valid"); // listed pairs untouched
+    expect(statuses.get("22222222:hvac")).toBe("valid");
+    expect(statuses.get("77777777:electrical")).toBe("invalid"); // company-absent leg A unchanged
+  });
+
   it("is idempotent: re-running the same SQL changes nothing; a fresh pass re-stamps only", async () => {
     const byCode = await seed();
     const sqlPass1 = planToSql(buildImportPlan(lubaFixture, planOpts));
@@ -582,9 +691,9 @@ describe("integration: luba-format import SQL against miniflare D1", () => {
     await seed();
     const sql = planToSql(buildImportPlan(lubaFixture, { ...planOpts, dryRun: true }));
 
-    // Structurally read-only: exactly the three diagnostics SELECTs.
+    // Structurally read-only: exactly the diagnostics SELECTs (plus one dropped-trade projection per expire chunk, SUBC-041).
     const statements = toStatements(sql);
-    expect(statements).toHaveLength(3);
+    expect(statements).toHaveLength(4);
     expect(statements.every((s) => /^SELECT/i.test(s))).toBe(true);
 
     // (1) before-counts: exactly the seeded mtr:% trade row (77777777, valid);
@@ -597,9 +706,14 @@ describe("integration: luba-format import SQL against miniflare D1", () => {
     const projection = await env.DB.prepare(statements[1]!).all<{ would_expire: number }>();
     expect(projection.results[0]!.would_expire).toBe(1);
 
+    const droppedProj = (
+      await env.DB.prepare(statements[2]!).all<{ would_expire_dropped: number }>()
+    ).results[0]!.would_expire_dropped;
+    expect(droppedProj).toBe(0); // no listed company holds an unlisted stale trade here
+
     // (3) matched companies present: five of the nine luba codes exist in
     // companies (the four foreign codes match no company row → no-op upserts).
-    const matched = await env.DB.prepare(statements[2]!).all<{ matched_companies: number }>();
+    const matched = await env.DB.prepare(statements[3]!).all<{ matched_companies: number }>();
     expect(matched.results[0]!.matched_companies).toBe(5);
 
     // Executing the whole bundle changes zero rows in either table.
@@ -608,6 +722,81 @@ describe("integration: luba-format import SQL against miniflare D1", () => {
     await runImportSql(sql);
     expect(await tradeRows()).toEqual(tradeBefore);
     expect(await db().select().from(companies)).toEqual(companiesBefore);
+  });
+
+  it("SUBC-041 parity: projected expiries equal actual flips exactly", async () => {
+    const byCode = await seed();
+    await env.DB.prepare(
+      `INSERT INTO company_verifications (id,  companyId,  type,  trade,  status,  checkedAt,  sourceDataset,  sourceLicence)
+       VALUES ('subc041-dropped', ?, 'trade_notification', 'flooring', 'valid', '${PAST_CHECKED_AT}', 'mtr:test', 'SUBC-041 parity')`,
+    ).bind(byCode["22222222"]!).run();
+    const drySql = planToSql(buildImportPlan(lubaFixture, { ...planOpts, dryRun: true }));
+    const stmts = toStatements(drySql);
+    const projected = (
+      await env.DB.prepare(stmts[1]!).all<{ would_expire: number }>()
+    ).results[0]!.would_expire;
+    let dropped = 0;
+    for (const s of stmts.filter((x) => x.includes("would_expire_dropped"))) {
+      dropped += (
+        await env.DB.prepare(s).all<{ would_expire_dropped: number }>()
+      ).results[0]!.would_expire_dropped;
+    }
+    expect(projected + dropped).toBe(2); // 77777777 absent + 22222222 dropped trade
+
+    await runImportSql(planToSql(buildImportPlan(lubaFixture, planOpts)));
+    const statuses = await tradeStatusMap(byCode);
+    expect(statuses.get("77777777:electrical")).toBe("invalid"); // leg A flip
+    expect(statuses.get("22222222:flooring")).toBe("invalid"); // chunk-leg flip
+    expect(statuses.get("22222222:plumbing")).toBe("valid"); // listed pairs untouched
+  });
+
+  it("SUBC-041 hygiene: NULL-trade mtr:% rows of listed companies retire", async () => {
+    const byCode = await seed();
+    await env.DB.prepare(
+      `INSERT INTO company_verifications (id,  companyId,  type,  trade,  status,  checkedAt,  sourceDataset,  sourceLicence)
+       VALUES ('subc041-null-trade', ?, 'trade_notification', NULL, 'valid', '${PAST_CHECKED_AT}', 'mtr:test', 'SUBC-041 hygiene')`,
+    ).bind(byCode["22222222"]!).run();
+    await runImportSql(planToSql(buildImportPlan(lubaFixture, planOpts)));
+    const rows = (await tradeRows()) as Row[];
+    const nullRow = rows.find(
+      (r) => r.companyId === byCode["22222222"] && r.trade === null,
+)!;
+    expect(nullRow.status).toBe("invalid"); // belongs to no listed pair -> retired
+    expect(nullRow.checkedAt).toBe(NOW);
+  });
+
+  it("SUBC-041 multi-chunk: code-atomic legs keep exact parity across chunks", async () => {
+    const byCode = await seed();
+    await env.DB.prepare(
+      `INSERT INTO company_verifications (id,  companyId,  type,  trade,  status,  checkedAt,  sourceDataset,  sourceLicence)
+       VALUES ('subc041-mc-dropped', ?, 'trade_notification', 'drywall', 'valid', '${PAST_CHECKED_AT}', 'mtr:test', 'SUBC-041 multi-chunk')`,
+    ).bind(byCode["55555555"]!).run(); // 55555555 lists painting only -> drywall dropped
+    const budgetOpts = { ...planOpts, chunkBudgetBytes: 400 }; // floor -> multi-chunk
+    const plan = buildImportPlan(lubaFixture, budgetOpts);
+    const chunkLegs = plan.expireStatements.slice(1);
+    expect(chunkLegs.length).toBeGreaterThanOrEqual(2); // actually multi-chunk
+    const owners = new Map<string, string>();
+    for (const leg of chunkLegs) {
+      const m = leg.match(/IN \(([\s\S]*?)\)\n {2}\)\n {2}AND NOT EXISTS/)!;
+      for (const code of m[1]!.split(",")) {
+        expect(owners.has(code)).toBe(false); // a code never splits across chunks
+        owners.set(code, leg.slice(0, 24));
+      }
+      expect(leg.length).toBeLessThanOrEqual(100_000); // D1 cap holds at floor budget
+    }
+    const dryStmts = toStatements(
+      planToSql(buildImportPlan(lubaFixture, { ...budgetOpts, dryRun: true })),
+    );
+    let projectedDrops = 0;
+    for (const s of dryStmts.filter((x) => x.includes("would_expire_dropped"))) {
+      projectedDrops += (
+        await env.DB.prepare(s).all<{ would_expire_dropped: number }>()
+      ).results[0]!.would_expire_dropped;
+    }
+    await runImportSql(planToSql(plan));
+    const statuses = await tradeStatusMap(byCode);
+    expect(statuses.get("55555555:drywall")).toBe("invalid"); // flipped exactly once
+    expect(projectedDrops).toBe(1); // chunk projections sum to the single flip
   });
 
   it("legacy-format import SQL still lands its three rows and expires the absent company", async () => {

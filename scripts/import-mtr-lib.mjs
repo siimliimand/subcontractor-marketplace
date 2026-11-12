@@ -28,6 +28,13 @@
  * and how many matched undertakers exist in companies), then a projection
  * summary. No INSERT/UPDATE is ever emitted in dry-run, for ANY input;
  * --force-expire is ignored under dry-run with an explicit warning.
+ *
+ * PER-TRADE EXPIRE (SUBC-041): beyond leg A, the plan emits chunked
+ * per-trade expire legs retiring exactly the stale rows of listed
+ * (company, trade) pairs the current import no longer carries; dry-run
+ * gains one would_expire_dropped COUNT projection per chunk. Chunking
+ * is atomic per registry code under a 90,000-byte budget (D1 caps a
+ * statement at 100,000 bytes), so projections sum exactly to flips.
  */
 
 import { XMLParser } from "fast-xml-parser";
@@ -202,6 +209,57 @@ function noticeValid(notice, today) {
 const sqlEscape = (s) => String(s).replace(/'/g, "''");
 
 /**
+ * D1 caps a single SQL statement at 100,000 bytes; the real export carries
+ * ~8,095 (code, trade) pairs (~210KB as one VALUES list), so per-trade
+ * expire legs are chunked. Budget: 90,000 bytes of codes+pairs per emitted
+ * statement keeps every leg comfortably under the platform cap (SUBC-041).
+ */
+export const MAX_PAIR_CHUNK_BUDGET_BYTES = 90_000;
+
+/**
+ * Pack the plan's (code, trade) pairs into byte-budgeted chunks. Grouping
+ * is atomic per registry code - a code's pairs NEVER split across chunks -
+ * so every stale dropped-trade row belongs to exactly one chunk leg and the
+ * dry-run per-chunk projections sum exactly to the applied flips. At most
+ * six mapped trades exist per code, so any whole-code group fits even the
+ * 400-byte floor budget and atomicity never forces an oversize statement.
+ */
+export function chunkPairsByBudget(
+  upserts,
+  budgetBytes = MAX_PAIR_CHUNK_BUDGET_BYTES,
+) {
+  const budget = Math.max(400, Math.min(budgetBytes, MAX_PAIR_CHUNK_BUDGET_BYTES));
+  const groups = [];
+  const byCode = new Map();
+  for (const u of upserts) {
+    let g = byCode.get(u.registrationIdentifier);
+    if (!g) {
+      g = { code: `'${sqlEscape(u.registrationIdentifier)}'`, pairs: [] };
+      byCode.set(u.registrationIdentifier, g);
+      groups.push(g);
+    }
+    g.pairs.push(`('${sqlEscape(u.registrationIdentifier)}','${sqlEscape(u.trade)}')`);
+  }
+  const chunks = [];
+  for (const g of groups) {
+    const pairsText = g.pairs.join(",");
+    const cost = g.code.length + 1 + pairsText.length;
+    const last = chunks[chunks.length - 1];
+    if (!last || last.bytes + cost > budget) {
+      chunks.push({ codesList: [g.code], pairsList: [pairsText], bytes: cost });
+    } else {
+      last.codesList.push(g.code);
+      last.pairsList.push(pairsText);
+      last.bytes += cost;
+    }
+  }
+  return chunks.map((c) => ({
+    codesList: c.codesList.join(","),
+    pairsText: c.pairsList.join(","),
+  }));
+}
+
+/**
  * READ-ONLY diagnostics block for dry-run plans (SUBC-029): three SELECT
  * statements, zero writes —
  *   (1) before-counts: current mtr:% trade_notification rows by status
@@ -213,7 +271,7 @@ const sqlEscape = (s) => String(s).replace(/'/g, "''");
  * matchedCodesList is the same quoted IN-list construction the expire
  * statement uses (IN ('') when nothing matched).
  */
-function dryRunDiagnostics(matchedCodesList, checkedAt) {
+function dryRunDiagnostics(matchedCodesList, checkedAt, droppedChunks = []) {
   return `-- READ-ONLY DIAGNOSTICS (dry-run): three SELECT statements, zero writes
 -- (1) before-counts: current mtr:% trade_notification rows by status
 SELECT status, COUNT(*) AS row_count FROM company_verifications
@@ -232,6 +290,22 @@ WHERE type = 'trade_notification'
       AND c.registrationIdentifier IN (${matchedCodesList})
   );
 
+${droppedChunks.map((chunk, i) => `-- (2b.${i + 1}/${droppedChunks.length}) dropped-trade projection (expire chunk ${i + 1}): stale rows of listed companies the import retires for trades absent from the plan
+SELECT COUNT(*) AS would_expire_dropped FROM company_verifications
+WHERE type = 'trade_notification'
+  AND sourceDataset LIKE 'mtr:%'
+  AND checkedAt < '${checkedAt}'
+  AND EXISTS (
+    SELECT 1 FROM companies c
+    WHERE c.id = company_verifications.companyId
+      AND c.registrationIdentifier IN (${chunk.codesList})
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM companies c2, (VALUES ${chunk.pairsText}) v
+    WHERE c2.id = company_verifications.companyId
+      AND c2.registrationIdentifier = v.column1
+      AND v.column2 = company_verifications.trade
+  );`).join("\n\n")}${droppedChunks.length ? "\n\n" : ""}
 -- (3) matched companies present: upserts that will actually land (the rest are no-ops)
 SELECT COUNT(*) AS matched_companies FROM companies
 WHERE registrationIdentifier IN (${matchedCodesList});`;
@@ -264,6 +338,7 @@ export function buildImportPlan(xmlString, opts = {}) {
   const now = opts.now ?? new Date().toISOString();
   const forceExpire = opts.forceExpire === true;
   const dryRun = opts.dryRun === true;
+  const chunkBudget = opts.chunkBudgetBytes;
 
   const doc = makeParser().parse(xmlString);
   const undertakers = findUndertakers(doc);
@@ -306,10 +381,12 @@ export function buildImportPlan(xmlString, opts = {}) {
   const warnings = [];
   const matchedCodesList =
     [...perCompany.keys()].map((c) => `'${sqlEscape(c)}'`).join(",") || "''";
-  let expireStatement = null;
+  const expireChunks = chunkPairsByBudget(upserts, chunkBudget);
+  const expireStatements = [];
   let guarded = false;
   if (upserts.length > 0 || forceExpire) {
-    expireStatement = `-- Expire trade notifications for companies whose current import no longer lists them
+    // Leg A: byte-identical to the SUBC-015 company-absent expire leg.
+    expireStatements.push(`-- Expire trade notifications for companies whose current import no longer lists them
 UPDATE company_verifications
 SET status = 'invalid', checkedAt = '${checkedAt}', sourceDataset = '${ds}'
 WHERE type = 'trade_notification'
@@ -319,7 +396,30 @@ WHERE type = 'trade_notification'
     SELECT 1 FROM companies c
     WHERE c.id = company_verifications.companyId
       AND c.registrationIdentifier IN (${matchedCodesList})
-  );`;
+  );`);
+    // Leg B (SUBC-041): chunked per-trade legs retiring exactly the stale
+    // rows of listed (company, trade) pairs the plan no longer carries.
+    // Whole codes stay atomic per chunk, so every dropped row belongs to
+    // exactly one leg and the dry-run projections sum to applied flips.
+    expireChunks.forEach((chunk, i) => {
+      expireStatements.push(`-- Expire dropped-trade rows for companies still listed in the import (chunk ${i + 1}/${expireChunks.length})
+UPDATE company_verifications
+SET status = 'invalid', checkedAt = '${checkedAt}', sourceDataset = '${ds}'
+WHERE type = 'trade_notification'
+  AND sourceDataset LIKE 'mtr:%'
+  AND checkedAt < '${checkedAt}'
+  AND EXISTS (
+    SELECT 1 FROM companies c
+    WHERE c.id = company_verifications.companyId
+      AND c.registrationIdentifier IN (${chunk.codesList})
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM companies c2, (VALUES ${chunk.pairsText}) v
+    WHERE c2.id = company_verifications.companyId
+      AND c2.registrationIdentifier = v.column1
+      AND v.column2 = company_verifications.trade
+  );`);
+    });
   } else {
     guarded = true;
     warnings.push(
@@ -341,14 +441,14 @@ WHERE type = 'trade_notification'
     ? `-- summary: ${upserts.length} trade-notification rows would be upserted across ${perCompany.size} undertakers (dry-run — no writes emitted)`
     : `-- summary: ${upserts.length} trade-notification rows upserted across ${perCompany.size} undertakers`;
   const dryRunSql = dryRun
-    ? [headerComment, dryRunDiagnostics(matchedCodesList, checkedAt), summaryComment].join("\n\n") + "\n"
+    ? [headerComment, dryRunDiagnostics(matchedCodesList, checkedAt, expireChunks), summaryComment].join("\n\n") + "\n"
     : null;
 
   return {
     undertakersRead: undertakers.length,
     matchedUndertakers: perCompany.size,
     upserts,
-    expireStatement,
+    expireStatements,
     warnings,
     guarded,
     dryRun,
@@ -396,7 +496,7 @@ ON CONFLICT (companyId, type, COALESCE(trade, '')) DO UPDATE SET
   sourceLicence = excluded.sourceLicence,
   detailJson = excluded.detailJson;`);
   }
-  if (plan.expireStatement) parts.push(plan.expireStatement);
+  for (const stmt of plan.expireStatements) parts.push(stmt);
   for (const warning of plan.warnings) parts.push(`-- ${warning}`);
   parts.push(plan.summaryComment);
   return parts.join("\n\n") + "\n";
