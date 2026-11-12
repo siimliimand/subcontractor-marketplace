@@ -1260,3 +1260,74 @@ Evidence (2026-11-06, SUBC-039, worktree `subc-039`):
 | agents.md control matrix post-edit | heading count `1`; `rescue/<branch>` and `rescue/fusion-subc-009` phrases present; `paused-open` ×2; `mission/*` phrase present | binding clauses intact and unique |
 | Decision log append-only preservation | SUBC-026 heading still ×1 at line 450; new entry appended strictly at EOF (after the SUBC-056 entry, then last in file) | the authoritative record and all prior entries untouched |
 | Git currency: `git rev-list --left-right --count origin/main...main` | `0 1` (ahead-only, pending landing gate) | worktree based on current main; drift-response rule not triggered |
+
+
+## Watchdog revival signal attributed: the 2026-11-04T19:57:50Z external publish was an operator gate run, the */10 cron is still dead — 2026-11-06 (SUBC-040)
+
+**Decision: the gate-mediated publish that landed `4fb75f0` on origin/main at 2026-11-04T19:59:44Z (Actions run #28, id 41902001270) was an operator manual `push-main-when-ahead` run at 19:57:50Z, attributed by elimination from every recorded agent-session boundary — it was NOT a firing of the */10 watchdog cron, which re-verified STILL DEAD at this task's execution (2026-11-06: `cron.log` ABSENT, zero */10-cadence entries anywhere in the gate log, a ≈13.6 h write-silence tail). The two-way hypothesis SUBC-030's delivery record left open ("repaired cron OR operator manual run") is settled for this event as the second branch; the cron install itself remains open and operator-owned (SUBC-043). Misdiagnosis guards are now recorded in agents.md and the operator card: a tip-named push-ok line — including one your session never wrote — is NOT proof of cron revival (`cron.log` is the tick authority); re-derive refs sequentially immediately before any flush (a publish may have raced your landing); manual flush stays the mandated trigger until ticks appear, then stops.**
+
+### The signal event (gate log lines content-matched in `~/.local/state/ci-currency/auto-push.log`; match by content, never line number — the log appends)
+
+| Time (UTC) | Log line (verbatim tail) | Reading |
+|---|---|---|
+| 11-04 19:23:01.518Z | `… ahead=0 behind=0 → noop (local main == origin/main; nothing to push)` | Last pre-signal gate observation: local main == origin/main at tip `530360c`. SUBC-028's entry already records this run as "a concurrent external full gate run" from its session's perspective |
+| 11-04 19:23 → 19:57 | (no gate lines) | Engine-side squash landings advanced local main `530360c` → `84a1eb7` (SUBC-025) → `4fb75f0` (SUBC-028); the engine never pushes (SUBC-008 contract) |
+| 11-04 19:57:50.307Z | `… ahead=2 behind=0 → push (local main is ahead by 2 commit(s); pushing to origin/main)` | THE SIGNAL: a full gate invocation (not a `--check` probe) pushing both pending landings |
+| 11-04 19:59:44.488Z | `OK main pushed and green (tip 4fb75f0526f9ee4cde33c5c645e21f68a690fa4a, run id=41902001270)` | Tip-named push-ok evidence for the signal run |
+| 11-04 20:00:39.857Z | `… ahead=0 behind=0 → noop …` | SUBC-030's own gate run — noop. ⚑ Its `--strict` checker at 20:01:50Z found the tip-named OK line already on disk, proving SUBC-030 did not write it (recorded prior evidence: SUBC-030 task log, planner capture 2026-11-05; `fn_task_logs_read` is current-task-scoped, so this entry uses the persisted-record fallback per the SUBC-025 precedent) |
+| 11-04 20:19:25Z | (session boundary) ⚑ | SUBC-031's session begins — after the signal; its own flush is the 20:33:56Z push below |
+
+GitHub surface (live 2026-11-06, `gh api repos/siimliimand/subcontractor-marketplace/actions/runs/41902001270`): head_sha `4fb75f0526f9ee4cde33c5c645e21f68a690fa4a`, created_at `2026-11-04T19:57:54Z`, conclusion `success`, event `push`, actor/triggering_actor `siimliimand` — token-level only, per the SUBC-025 attribution limit (verbatim): "every push from this host rides the shared siimliimand gh OAuth token, so GitHub's actor/triggering_actor fields (both `siimliimand`) are token-level only and cannot separate agent from founder — the attribution rests on the host-side evidence above."
+
+### Attribution matrix — why operator-manual, by elimination
+
+| Candidate writer of the 19:57:50Z run | Verdict | Basis |
+|---|---|---|
+| The */10 watchdog cron | EXCLUDED | Tick evidence below: `cron.log` ABSENT then and now; no */10 cadence anywhere in the gate log — the run sits inside a session-shaped burst, not a cadence |
+| SUBC-030's session | EXCLUDED | Its gate run was the 20:00:39:857Z noop; ⚑ its strict checker proved the tip-named OK line predated it |
+| SUBC-031's session | EXCLUDED | Began 20:19:25Z — after the signal |
+| SUBC-028's session | EXCLUDED | Its entry records the session ended with local main still `530360c` — before both engine landings existed; its own probes were the 19:11:36Z `--check` and the 19:23:01Z "external full gate run" it observed |
+| Other concurrent agent sessions | EXCLUDED | Every landing-adjacent session in the window is accounted for in recorded entries (SUBC-025 in-review → engine landing; SUBC-033 not yet created — 22:11:31Z) |
+| The Fusion engine | EXCLUDED | Engine-side squash landing never pushes (SUBC-008, verified 2026-11-03); the two landings it made are exactly the two commits this run published |
+| Direct tip-chain push (SUBC-018 precedent) | EXCLUDED | The signal IS a logged full gate run on the single-writer path (ahead-only, pushes local main, tip-named evidence); SUBC-025's contract now makes the direct-push maneuver sanction-proof |
+| **Operator manual gate run** | **ATTRIBUTED** | Sole remaining writer under the single-writer contract; consistent with the same hand behind the 19:23:01Z noop probe SUBC-028 observed |
+
+### Tick evidence — the cron is STILL DEAD (re-derived at execution, 2026-11-06 ≈10:15Z)
+
+| Probe | Result | Implication |
+|---|---|---|
+| State-directory listing | only `auto-push.log` (28,503 bytes; last write 2026-11-05T20:33:26Z); `cron.log` ABSENT; `alert` ABSENT | The cron line's redirect creates `cron.log` on any firing → zero firings ever |
+| crontab spool probe (agent identity) | `crontabs/fusion/: fopen: Permission denied` (re-verified) | Agent identities cannot install or inspect the spool; install stays operator-owned (SUBC-043) |
+| Cadence scan (hour buckets over all 168 log lines, 2026-11-03T16:36Z → 2026-11-05T20:33Z) | session-window-shaped bursts only; longest in-log gaps ≈5.1 h (11-04T22:35→11-05T03:43) and ≈6.5 h (11-05T14:00→20:31); no noop line at */10 alignment | A live */10 cron writes ≈6 lines/h around the clock; no bucket shows that shape |
+| Write-silence tail | nothing appended after 2026-11-05T20:33:26Z through the 2026-11-06 probes (≈13.6 h) | ≈80 tick lines + cron.log creation expected from a live cron in that window alone; zero observed |
+| GitHub event scan (`gh run list --branch main`) | newest runs all `event=push`; no `schedule` events | No remote-side scheduled trigger exists either |
+| Re-probe at apply (2026-11-11) | `cron.log` still ABSENT; gate log 168 → 182 lines — exactly two session-shaped flush bursts (runs #41 and #42 below), zero */10-aligned entries, multi-day silence tail after 11-06 17:40Z | The cron has still never fired as of this entry's landing prep |
+
+Probes ran from the subc-040 worktree via the sanctioned `$HOME` indirection (`"$HOME/.local/state/ci-currency/…"`) — literal home paths in command arguments are rejected by the execution boundary, and the SUBC-043 spec records the indirection as the sanctioned method.
+
+### Publish ledger since the SUBC-020 stall (every entry a gate-mediated push with tip-named evidence; none cron)
+
+| # | Push OK (UTC) | Tip | Run id | Attribution (basis) |
+|---|---|---|---|---|
+| 1 | 11-04 12:01:09Z | `f07eb93` | 41825457594 (#21) | SUBC-020 flush (recorded, SUBC-020 entry) |
+| 2 | 11-04 12:54:29Z | `e53c3d9` | 41833136682 (#22) | Sanctioned gate publish (recorded, SUBC-025 entry evidence row 1) |
+| 3 | 11-04 15:35:48Z | `530360c` | 41859159358 (#27) | Post-wedge-repair flush (SUBC-022/023 era; run id in SUBC-028's positive control) |
+| 4 | 11-04 19:59:44Z | `4fb75f0` | 41902001270 (#28) | **THE SIGNAL — operator manual gate run at 19:57:50Z, by elimination (this entry)** |
+| 5 | 11-04 20:35:50Z | `9a749b44` | 41907815753 (#29) | SUBC-031 landing-checklist flush (published the SUBC-026 `50433302` + SUBC-029 landings; recorded, SUBC-032 entry) |
+| 6 | 11-04 22:32:57Z | `3a8a46af` | 41925996639 | SUBC-033 flush (task created 22:11:31Z by SUBC-032's post-merge reviewer) |
+| 7 | 11-05 05:01:58Z | `3cb44d7` | 41971217148 | SUBC-034 flush |
+| 8 | 11-05 05:51:11Z | `bdba7617` | 41976408200 | SUBC-035 flush (gh-verified 2026-11-06: created 05:49:21Z, success, event push) |
+| 9 | 11-05 09:07:26Z | `42783f9f` | 41999538377 | Landing-checklist flush (post-planning, re-derived live; gh-corroborated tip/run) |
+| 10 | 11-05 10:51:24Z | `9df649f8` | 42013976106 | Landing-checklist flush |
+| 11 | 11-05 11:21:36Z | `dfa517f0` | 42018113000 | SUBC-044 landing flush (gh run-list subject match) |
+| 12 | 11-05 11:54:32Z | `5d867ae6` | 42022494242 | Docs landing "renew README to 2026-11-05 state" (gh subject match) |
+| 13 | 11-05 12:24:40Z | `906c171` | 42026894548 (#37) | SUBC-051 landing published mid-flush-race: gate pushed `906c1711…` (run #37 green on the tip) but its chained currency verify FAILed because local main had already advanced to `f961eb0` mid-flush — published by row 14's immediate re-run; no tip-named OK line exists for this row |
+| 14 | 11-05 12:29:51Z | `f961eb0` | 42027428423 | SUBC-050 final OK flush (immediately follows row 13's mid-flush race re-run) |
+| 15 | 11-05 13:54:14Z | `2017c74` | 42039699895 | SUBC-049 landing-checklist flush |
+| 16 | 11-05 20:33:26Z | `b0fe733` | 42104190695 (#40) | SUBC-058 landing flush (the same landing added the gate-native bounded mid-flush retry) |
+| 17 | 11-06 16:32:21Z | `172ebe4` | 42253052908 (#41) | Heal flush of the standing ahead-only drift (published SUBC-056's decision-log landing after ≈20 h unpublished; gate log lines 169–175, gh-corroborated tip/run) |
+| 18 | 11-06 17:40:50Z | `23b5f34` | 42263633132 (#42) | SUBC-039 landing-checklist flush (coordinator-verified APPROVE_WITH_NOTES → publish; the current local+origin tip at this entry's apply) |
+
+Rows 9–16 re-derived live from the gate log + gh run list at execution (2026-11-06); rows 17–18 appended at apply from the same gate log under the same re-derivation rule (2026-11-11). Execution-time currency at the 2026-11-06 derivation was local main `172ebe4` ahead-only vs origin/main `b0fe733` — the standing manual-flush reality; at apply (2026-11-11) currency is restored: local main == origin/main == `23b5f34` (run #42 green). The flush is owned by the landing checklist / SUBC-043, never this docs task.
+
+**Residual operator confirmation ask (one sentence either way):** did the operator manually run `push-main-when-ahead` at ~2026-11-04T19:57:50Z (the run that published `4fb75f0`), and does the operator intend to install the documented */10 timer line (the canonical install block in `docs/operator-ci-currency-cron.md`)? Until either answer arrives, every landing keeps needing a manual flush, and every tip-named push-ok line keeps needing the tick-log cross-check recorded in this entry.

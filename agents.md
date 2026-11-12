@@ -159,7 +159,13 @@ trigger is now automated.
   tip). A non-zero exit is a **landing failure** — treat it exactly like a
   failed check: do not start the next merge, surface it in the task log.
   `--check` is the read-only probe (`ahead/behind` report; exit 1 on drift,
-  never pushes, never touches the alert file). SUBC-028 (2026-11-05) made this
+  never pushes, never touches the alert file). Before running the gate,
+  re-derive `main` vs `origin/main` sequentially: a concurrent publish —
+  another session's flush or an operator manual run — can dissolve an
+  ahead-only premise mid-session, and the gate's noop path is success, not
+  failure (the SUBC-030 race lesson). A tip-named push-ok line for a tip your
+  session did not push is attribution homework, NOT cron revival — `cron.log`
+  presence is the tick authority (SUBC-040). SUBC-028 (2026-11-05) made this
   rule checkable and expanded it into the mandatory numbered sequence in the
   "Landing checklist (SUBC-028)" below, verified by the read-only
   `scripts/verify-landing-gate.mjs` checker.
@@ -220,19 +226,19 @@ trigger is now automated.
   `/usr/local/bin/node` is deliberate: cron's default PATH lacks
   `/usr/local/bin`, and `/usr/bin/node` does not exist on this host.
 
-  **Re-issue status (2026-11-05, SUBC-032): still NOT installed.** `cron.log`
-  remains absent from the state dir as of 2026-11-05 (the cron has never
-  fired since install; the SUBC-026 landing `50433302` and the SUBC-029
-  landing `9a749b44` sat unpublished on local main until the SUBC-031 manual
-  flush on 2026-11-04). The canonical operator card now lives at
-  `docs/operator-ci-currency-cron.md` — the operator's single entry point
-  (prerequisites, the install block above, rollback, and host-rebuild
-  re-apply). Post-install acceptance is built into the card: `cron.log`
-  appears within ~10 minutes (proof-of-fire) and
-  `node scripts/verify-landing-gate.mjs` exits 0 on the next landing within
-  ~10 minutes. Until installed, every landing needs a manual flush per the
-  Landing checklist above (SUBC-020 action item 1 stands: cron repair is
-  operator-owned).
+  **Re-issue status (2026-11-06, SUBC-040): still NOT installed — and the 2026-11-04T19:57:50Z
+  external publish of `4fb75f0` (run #28, id 41902001270) was an operator manual gate run, NOT a
+  cron firing — attributed by elimination in the decision log (SUBC-040 entry).** `cron.log`
+  remains absent from the state dir (re-verified 2026-11-06 and again 2026-11-11); the cron has
+  never fired since install and `cron.log` is the tick authority. Misdiagnosis guards: a
+  tip-named push-ok line — including one your session never wrote — is NOT proof of cron revival;
+  re-derive refs sequentially immediately before any flush (a publish may have raced your
+  landing); manual flush stays the mandated trigger until ticks appear, then stops. The canonical
+  operator card now lives at `docs/operator-ci-currency-cron.md` — the operator's single entry
+  point (prerequisites, the install block above, rollback, and host-rebuild re-apply), with its
+  post-install acceptance sequence unchanged. Until installed, every landing needs a manual flush
+  per the Landing checklist above (SUBC-020 action item 1 stands: cron repair is operator-owned).
+
 - **Drift response:** if `~/.local/state/ci-currency/alert` exists, or
   `node scripts/verify-ci-currency.mjs` exits non-zero, **create an urgent
   task and merge NO further work onto `main` until currency is restored**

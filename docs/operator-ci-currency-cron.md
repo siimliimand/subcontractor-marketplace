@@ -7,7 +7,7 @@ this card is documentation the operator applies — an agent cannot perform it.
 This card is the single canonical, self-contained entry point for the install;
 follow it top-to-bottom.
 
-## Purpose and current status (STILL DEAD as of 2026-11-05)
+## Purpose and current status (STILL DEAD as of 2026-11-11)
 
 `scripts/push-main-when-ahead.mjs` is this repo's single sanctioned writer of
 the mainline ref, driven by exactly three triggers: this */10 cron tick, the
@@ -22,11 +22,26 @@ sits unpublished on local main until a human or agent notices and flushes.
   `>> … /cron.log 2>&1` redirect creates on any firing, is ABSENT. crond
   itself is active; the spool entry is simply not installed (diagnosed in
   SUBC-020, 2026-11-04).
+- **The 2026-11-04T19:57:50Z external publish was NOT a cron firing.** The
+  gate run that landed `4fb75f0` (run #28, id 41902001270) was attributed as
+  an operator manual run by elimination from every recorded session boundary
+  (decision log, "Watchdog revival signal attributed — 2026-11-06 (SUBC-040)").
+  Misdiagnosis guards: a tip-named push-ok line — including one your session
+  never wrote — is NOT proof of cron revival (`cron.log` is the tick
+  authority); re-derive refs sequentially immediately before any flush; the
+  manual flush stays the mandated trigger until ticks appear, then stops.
+  Operator confirmation ask (open — never recorded as answered): was this run
+  your manual gate invocation at ~2026-11-04T19:57:50Z, and do you still
+  intend to install this card's */10 timer line? One sentence either way,
+  answered in the decision log (SUBC-040).
 - **Demonstrated recurring cost:** the SUBC-026 landing (`50433302`) and the
   SUBC-029 landing (`9a749b44`) both sat unpublished on local main until
   SUBC-031 manually ran `node scripts/push-main-when-ahead.mjs` on 2026-11-04
   (gate exit 0, Actions run #29 id 41907815753 green). Until this card is
-  applied, every landing needs another manual flush session.
+  applied, every landing needs another manual flush session. The cost recurred on 2026-11-06: SUBC-056's
+  landing sat unpublished ≈20 h until the heal flush (run #41, id
+  42253052908), and SUBC-039's landing published via its checklist flush
+  (run #42, id 42263633132) — all gate-mediated, none cron.
 
 ## Prerequisites
 
@@ -123,7 +138,10 @@ state-directory creation), then re-run the post-install acceptance sequence.
   "Landing-push stall diagnosed and flushed — 2026-11-04 (SUBC-020)" (the
   original diagnosis and repair card — immutable history);
   "Landing-gate enforcement made checkable — 2026-11-05 (SUBC-028)" (the
-  checker this card's acceptance step 4 uses).
+  checker this card's acceptance step 4 uses);
+  "Watchdog revival signal attributed — 2026-11-06 (SUBC-040)" (the
+  19:57:50Z publish attribution, the still-dead tick evidence, and the
+  misdiagnosis guards).
 - `scripts/verify-landing-gate.mjs` — the read-only landing-gate checker
   (usage: `node scripts/verify-landing-gate.mjs [--strict] [<tip sha>]`).
 
