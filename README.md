@@ -73,20 +73,26 @@ npm run db:migrate:local              # apply migrations to the local D1
 npm run dev                           # wrangler dev (API :8787) + vite (UI :5173, proxies /api)
 ```
 
-Lint before landing: `npm run lint` (zero errors is the bar) — CI runs
-lint → build → typecheck → test.
+Lint before landing: `npm run lint` (zero errors AND zero warnings is the bar —
+the full react-hooks v7 rule suite including the React Compiler rules is
+enabled, per the SUBC-016 decision-log entry) — CI runs lint → build →
+typecheck → test → test:ui.
 
 ## Tests
 
 ```bash
-npm test
+npm test         # worker suite: vitest-pool-workers, real D1 in miniflare
+npm run test:ui  # jsdom UI lane: React page fetch-effect contract (RTL)
 ```
 
-395 integration tests (43 files) run against real D1 in miniflare (auth, providers,
+422 integration tests (43 files) run against real D1 in miniflare (auth, providers,
 requests, matching, holds/bookings, briefs, outreach, full email journey, delivery
 lifecycle, suppression, calendar sync, catalog, reviews/reliability, monetization,
 planner, provider accounts, register imports, dashboard, audit governance and the
-CI-currency tooling itself). Count verified 2026-11-05 (latest green CI run on main).
+CI-currency tooling itself). A separate jsdom lane (`npm run test:ui`,
+@testing-library/react) adds 15 UI tests locking the page fetch-effect contract
+(fetch on mount, refetch on filter/id change, stale-response guard under StrictMode;
+SUBC-016). Counts verified 2026-11-12 from local vitest output.
 
 ## Feature flags (wrangler `vars`, default off unless noted)
 
@@ -132,11 +138,12 @@ is empty.
 
 ## CI
 
-`.github/workflows/ci.yml` runs lint, build, typecheck and the full integration test
-suite on **every push (any branch)** and on pull requests; failed runs open a
-`ci-failure` issue as an alert (close it with a comment, never delete it), and a
-`ci-merge-gate-pilot` ruleset gates PR merges into `main` on the `test` check
-(currently **disabled** — parked pending PR-based landing support in Fusion).
+`.github/workflows/ci.yml` runs lint, build, typecheck, the full integration test
+suite and the jsdom UI lane (`npm run test:ui`) on **every push (any branch)** and
+on pull requests; failed runs open a `ci-failure` issue as an alert (close it with
+a comment, never delete it), and a `ci-merge-gate-pilot` ruleset gates PR merges
+into `main` on the `test` check (currently **disabled** — parked pending PR-based
+landing support in Fusion).
 
 **Push transport (single-writer contract).** `scripts/push-main-when-ahead.mjs` is the
 only component that ever pushes `main` (never force, never task branches). After a

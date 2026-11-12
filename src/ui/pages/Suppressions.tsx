@@ -7,6 +7,11 @@ type SuppressionRow = {
   createdAt: string;
 };
 
+async function fetchSuppressions(): Promise<SuppressionRow[]> {
+  const data = await get<{ suppressions: SuppressionRow[] }>("/suppressions");
+  return data.suppressions;
+}
+
 export default function Suppressions() {
   const [rows, setRows] = useState<SuppressionRow[] | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -14,15 +19,26 @@ export default function Suppressions() {
 
   async function load() {
     try {
-      const data = await get<{ suppressions: SuppressionRow[] }>("/suppressions");
-      setRows(data.suppressions);
+      setRows(await fetchSuppressions());
     } catch (e) {
       setFeedback(String(e));
     }
   }
 
   useEffect(() => {
-    load();
+    let alive = true;
+    fetchSuppressions().then(
+      (loadedRows) => {
+        if (!alive) return;
+        setRows(loadedRows);
+      },
+      (e: unknown) => {
+        if (alive) setFeedback(String(e));
+      },
+    );
+    return () => {
+      alive = false;
+    };
   }, []);
 
   async function add(e: FormEvent<HTMLFormElement>) {

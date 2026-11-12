@@ -11,6 +11,16 @@ const NEXT_ACTIONS: Record<string, string[]> = {
   responded: ["booked"],
 };
 
+async function fetchRequestDetail(id: string): Promise<RequestDetailData> {
+  return get<RequestDetailData>(`/requests/${id}`);
+}
+
+async function fetchRequestEffort(
+  id: string,
+): Promise<{ totalMinutes: number; manualEvents: number }> {
+  return get<{ totalMinutes: number; manualEvents: number }>(`/requests/${id}/effort`);
+}
+
 export default function RequestDetail() {
   const { id } = useParams<{ id: string }>();
   const [data, setData] = useState<RequestDetailData | null>(null);
@@ -22,9 +32,8 @@ export default function RequestDetail() {
   async function load() {
     if (!id) return;
     try {
-      const detail = await get<RequestDetailData>(`/requests/${id}`);
-      setData(detail);
-      setEffort(await get(`/requests/${id}/effort`));
+      setData(await fetchRequestDetail(id));
+      setEffort(await fetchRequestEffort(id));
       setError(null);
     } catch (e) {
       setError(String(e));
@@ -32,7 +41,22 @@ export default function RequestDetail() {
   }
 
   useEffect(() => {
-    load();
+    if (!id) return;
+    let alive = true;
+    (async () => {
+      const loadedDetail = await fetchRequestDetail(id);
+      if (!alive) return;
+      setData(loadedDetail);
+      const loadedEffort = await fetchRequestEffort(id);
+      if (!alive) return;
+      setEffort(loadedEffort);
+      setError(null);
+    })().catch((e: unknown) => {
+      if (alive) setError(String(e));
+    });
+    return () => {
+      alive = false;
+    };
   }, [id]);
 
   useEffect(() => {

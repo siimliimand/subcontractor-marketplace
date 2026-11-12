@@ -312,12 +312,17 @@ above; see also the decision-log entries “CI gate decision — 3 November
 
 - **Lint is part of every landing.** The repo has an ESLint 9 flat config
   (`eslint.config.mjs`) and a `lint` script; CI runs `npm run lint` before
-  build/typecheck/test in the single `test` job (job id unchanged — the
-  ruleset and the retired-sharding decision both bind to it). Run
-  `npm run lint` locally before landing; zero errors is the bar (warnings
-  from `react-hooks/exhaustive-deps` do not fail). Per-file
-  `eslint-disable` comments are forbidden — relax a rule only in
-  `eslint.config.mjs` with a justification comment AND a decision-log record.
+  build/typecheck/test (`npm test`, then `npm run test:ui` for the jsdom UI
+  lane) in the single `test` job (job id unchanged — the ruleset and the
+  retired-sharding decision both bind to it). Run `npm run lint` locally
+  before landing; the bar is zero errors AND zero warnings (`--max-warnings
+  0`): the full react-hooks v7 rule suite including the React Compiler rules
+  is enabled (SUBC-016, superseding the SUBC-013 classic-pair deferral) with
+  `exhaustive-deps` at `error` and the preset's two deliberate warn-level
+  rules (`incompatible-library`, `unsupported-syntax`) as the only sanctioned
+  warning signal. Per-file `eslint-disable` comments are forbidden — relax a
+  rule only in `eslint.config.mjs` with a justification comment AND a
+  decision-log record.
   On the fusion host, run npm installs with `NODE_ENV=development` (the agent
   shell exports `NODE_ENV=production`, which makes npm silently omit
   devDependencies).

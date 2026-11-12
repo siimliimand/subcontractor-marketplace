@@ -5,6 +5,15 @@ import { Company, PROVIDER_STATUSES, TRADES, statusBadge } from "../types";
 
 type ProviderRow = { company: Company; services: unknown[] };
 
+type ProviderFilters = { trade: string; status: string; serviceArea: string; q: string };
+
+async function fetchProviderRows(filters: ProviderFilters): Promise<ProviderRow[]> {
+  const params = new URLSearchParams(
+    Object.entries(filters).filter(([, v]) => v !== ""),
+  ).toString();
+  return get<ProviderRow[]>(`/providers${params ? `?${params}` : ""}`);
+}
+
 export default function Providers() {
   const [providers, setProviders] = useState<ProviderRow[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -13,11 +22,8 @@ export default function Providers() {
   const [filters, setFilters] = useState({ trade: "", status: "", serviceArea: "", q: "" });
 
   async function load() {
-    const params = new URLSearchParams(
-      Object.entries(filters).filter(([, v]) => v !== ""),
-    ).toString();
     try {
-      setProviders(await get<ProviderRow[]>(`/providers${params ? `?${params}` : ""}`));
+      setProviders(await fetchProviderRows(filters));
       setError(null);
     } catch (e) {
       setError(String(e));
@@ -25,7 +31,20 @@ export default function Providers() {
   }
 
   useEffect(() => {
-    load();
+    let alive = true;
+    fetchProviderRows(filters).then(
+      (rows) => {
+        if (!alive) return;
+        setProviders(rows);
+        setError(null);
+      },
+      (e: unknown) => {
+        if (alive) setError(String(e));
+      },
+    );
+    return () => {
+      alive = false;
+    };
   }, [filters]);
 
   async function submit(e: FormEvent<HTMLFormElement>) {

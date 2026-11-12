@@ -22,9 +22,10 @@ export default tseslint.config(
   {
     files: [
       'src/**/*.{ts,tsx}',
-      'test/**/*.ts',
+      'test/**/*.{ts,tsx}',
       'vite.config.ts',
       'vitest.config.ts',
+      'vitest.ui.config.ts',
       'drizzle.config.ts',
     ],
     extends: [js.configs.recommended, tseslint.configs.recommended],
@@ -53,14 +54,21 @@ export default tseslint.config(
           caughtErrorsIgnorePattern: '^_',
         },
       ],
-      // Classic react-hooks pair only. eslint-plugin-react-hooks v7's
-      // "recommended" preset additionally enables the React Compiler rule suite
-      // (purity, immutability, set-state-in-render, ...), which requires
-      // behavioral rewrites across the UI — out of scope for this non-behavioral
-      // lint baseline. exhaustive-deps starts at "warn" per the SUBC-013
-      // decision; rules-of-hooks stays an error.
-      'react-hooks/rules-of-hooks': 'error',
-      'react-hooks/exhaustive-deps': 'warn',
+      // Full react-hooks v7 rule suite, including the React Compiler rules
+      // (purity, immutability, set-state-in-render, set-state-in-effect, ...).
+      // This entry supersedes the SUBC-013 deferral (which kept the classic
+      // pair only because the preset "requires behavioral rewrites across the
+      // UI"): SUBC-016 found those rewrites are exactly five same-shaped
+      // load-in-effect sites, restructured onto the module-level fetch helper
+      // + effect-owned apply + stale-response guard pattern. exhaustive-deps
+      // is promoted from SUBC-013's "warn" to "error", and the lint script
+      // runs with --max-warnings 0, so the preset's two deliberate warn-level
+      // rules (incompatible-library, unsupported-syntax) become real signal:
+      // any future finding is a rule-level decision, not background noise.
+      // Per-file eslint-disable comments remain forbidden — rule changes
+      // happen only here with a justification comment and decision-log record.
+      ...reactHooks.configs['recommended-latest'].rules,
+      'react-hooks/exhaustive-deps': 'error',
     },
   },
   // Plain-Node scripts (and this config file itself).

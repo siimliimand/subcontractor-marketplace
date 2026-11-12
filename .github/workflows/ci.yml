@@ -28,6 +28,10 @@ jobs:
       - run: npm run build
       - run: npm run typecheck
       - run: npm test
+      # SUBC-016: jsdom UI lane for the page fetch-effect contract. Kept in
+      # the same single `test` job (no sharding — see decision log); isolated
+      # from the worker suite by the `.uitest.tsx` filename suffix.
+      - run: npm run test:ui
 
   # Failure alert (SUBC-013): every failing run (any event, any branch) opens or
   # comments on a `ci-failure` issue so the founder sees the failure without

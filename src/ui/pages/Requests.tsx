@@ -13,6 +13,15 @@ type BriefDraftResult = {
   state: string;
 };
 
+type RequestFilters = { status: string; trade: string };
+
+async function fetchRequestRows(filters: RequestFilters): Promise<RequestRow[]> {
+  const params = new URLSearchParams(
+    Object.entries(filters).filter(([, v]) => v !== ""),
+  ).toString();
+  return get<RequestRow[]>(`/requests${params ? `?${params}` : ""}`);
+}
+
 const BRIEF_FIELD_LABELS: Record<string, string> = {
   workType: "Work type",
   scope: "Scope",
@@ -182,11 +191,8 @@ export default function Requests() {
   }
 
   async function load() {
-    const params = new URLSearchParams(
-      Object.entries(filters).filter(([, v]) => v !== ""),
-    ).toString();
     try {
-      setRequests(await get<RequestRow[]>(`/requests${params ? `?${params}` : ""}`));
+      setRequests(await fetchRequestRows(filters));
       setError(null);
     } catch (e) {
       setError(String(e));
@@ -194,7 +200,20 @@ export default function Requests() {
   }
 
   useEffect(() => {
-    load();
+    let alive = true;
+    fetchRequestRows(filters).then(
+      (rows) => {
+        if (!alive) return;
+        setRequests(rows);
+        setError(null);
+      },
+      (e: unknown) => {
+        if (alive) setError(String(e));
+      },
+    );
+    return () => {
+      alive = false;
+    };
   }, [filters]);
 
   async function submit(e: FormEvent<HTMLFormElement>) {

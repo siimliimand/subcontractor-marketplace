@@ -42,6 +42,18 @@ type VerificationData = {
   mtrBadgesEnabled: boolean;
 };
 
+async function fetchProvider(id: string): Promise<Company> {
+  return get<Company>(`/providers/${id}`);
+}
+
+async function fetchAvailability(id: string): Promise<AvailabilityData> {
+  return get<AvailabilityData>(`/providers/${id}/availability`);
+}
+
+async function fetchVerifications(id: string): Promise<VerificationData> {
+  return get<VerificationData>(`/providers/${id}/verifications`);
+}
+
 export default function ProviderDetail() {
   const { id } = useParams<{ id: string }>();
   const [provider, setProvider] = useState<Company | null>(null);
@@ -53,9 +65,9 @@ export default function ProviderDetail() {
   async function load() {
     if (!id) return;
     try {
-      setProvider(await get<Company>(`/providers/${id}`));
-      setAvailability(await get<AvailabilityData>(`/providers/${id}/availability`));
-      setVerifications(await get<VerificationData>(`/providers/${id}/verifications`));
+      setProvider(await fetchProvider(id));
+      setAvailability(await fetchAvailability(id));
+      setVerifications(await fetchVerifications(id));
       setError(null);
     } catch (e) {
       setError(String(e));
@@ -63,7 +75,25 @@ export default function ProviderDetail() {
   }
 
   useEffect(() => {
-    load();
+    if (!id) return;
+    let alive = true;
+    (async () => {
+      const loadedProvider = await fetchProvider(id);
+      if (!alive) return;
+      setProvider(loadedProvider);
+      const loadedAvailability = await fetchAvailability(id);
+      if (!alive) return;
+      setAvailability(loadedAvailability);
+      const loadedVerifications = await fetchVerifications(id);
+      if (!alive) return;
+      setVerifications(loadedVerifications);
+      setError(null);
+    })().catch((e: unknown) => {
+      if (alive) setError(String(e));
+    });
+    return () => {
+      alive = false;
+    };
   }, [id]);
 
   async function saveProvider(e: FormEvent<HTMLFormElement>) {
